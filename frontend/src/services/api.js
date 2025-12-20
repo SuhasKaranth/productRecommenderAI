@@ -34,9 +34,25 @@ export const stagingApi = {
   rejectProduct: (id, reviewedBy, reviewNotes) =>
     api.post(`/api/admin/staging/${id}/reject`, { reviewedBy, reviewNotes }),
 
+  // Bulk reject products
+  bulkReject: (productIds, reviewedBy, reviewNotes) =>
+    api.post('/api/admin/staging/bulk-reject', { productIds, reviewedBy, reviewNotes }),
+
   // Delete product
   deleteProduct: (id) =>
     api.delete(`/api/admin/staging/${id}`),
+
+  // Bulk delete products
+  bulkDelete: (productIds) =>
+    api.post('/api/admin/staging/bulk-delete', { productIds }),
+
+  // Generate keywords for product
+  generateKeywords: (id) =>
+    api.post(`/api/admin/staging/${id}/generate-keywords`),
+
+  // Save keywords for product
+  saveKeywords: (id, keywords) =>
+    api.post(`/api/admin/staging/${id}/keywords`, { keywords }),
 
   // Get statistics
   getStats: () =>
@@ -44,6 +60,14 @@ export const stagingApi = {
 };
 
 export const scraperApi = {
+  // Scrape URL and return text content (MVP1)
+  scrapeUrl: (url) =>
+    api.post('http://localhost:8081/api/scraper/scrape-url', { url }),
+
+  // Scrape URL with AI analysis and extraction (MVP2)
+  scrapeUrlEnhanced: (url) =>
+    api.post('http://localhost:8081/api/scraper/scrape-url-enhanced', { url }),
+
   // Trigger scraping
   triggerScrape: (websiteId) =>
     api.post(`http://localhost:8081/api/scraper/trigger/${websiteId}`),
@@ -59,6 +83,58 @@ export const scraperApi = {
   // Get history
   getHistory: (websiteId) =>
     api.get(`http://localhost:8081/api/scraper/history/${websiteId}`),
+};
+
+// Recommendation API (Port 8080 - migrated to Spring Boot)
+const recommendationApiInstance = axios.create({
+  baseURL: 'http://localhost:8080',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+export const recommendationApi = {
+  // Get product recommendations based on user input
+  getRecommendations: (userInput, language = 'en') =>
+    recommendationApiInstance.post('/api/v1/recommend', {
+      userInput: userInput,  // Changed from user_input to userInput (camelCase for Java)
+      language: language,
+    }),
+};
+
+export const productApi = {
+  // Get all products with optional filters
+  getAllProducts: (category, active, search) => {
+    const params = new URLSearchParams();
+    if (category) params.append('category', category);
+    if (active !== undefined) params.append('active', active);
+    if (search) params.append('search', search);
+    return api.get(`/api/products?${params.toString()}`);
+  },
+
+  // Get single product by ID
+  getProduct: (id) =>
+    api.get(`/api/products/${id}`),
+
+  // Update product
+  updateProduct: (id, data) =>
+    api.put(`/api/products/${id}`, data),
+
+  // Delete single product
+  deleteProduct: (id) =>
+    api.delete(`/api/products/${id}`),
+
+  // Bulk delete products
+  bulkDeleteProducts: (productIds) =>
+    api.post('/api/products/bulk-delete', { productIds }),
+
+  // Generate keywords for product
+  generateKeywords: (id) =>
+    api.post(`/api/products/${id}/generate-keywords`),
+
+  // Save keywords for product
+  saveKeywords: (id, keywords) =>
+    api.post(`/api/products/${id}/keywords`, { keywords }),
 };
 
 export default api;

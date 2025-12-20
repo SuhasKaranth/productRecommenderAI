@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -92,14 +93,14 @@ public class ScraperOrchestrationService {
     /**
      * Get all configured scrape sources
      */
-    public List<Object> getAllScrapeSources() {
+    public List<Map<String, Object>> getAllScrapeSources() {
         return databaseService.getAllScrapeSources();
     }
 
     /**
      * Get scrape history for a website
      */
-    public List<Object> getWebsiteScrapeHistory(String websiteId) {
+    public List<Map<String, Object>> getWebsiteScrapeHistory(String websiteId) {
         return databaseService.getScrapeHistory(websiteId);
     }
 }

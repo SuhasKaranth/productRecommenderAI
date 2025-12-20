@@ -28,8 +28,8 @@ public class StagingProduct {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    // Product data fields
-    @Column(name = "product_code", nullable = false, length = 50)
+    // Product data fields (product_code nullable until approval)
+    @Column(name = "product_code", length = 50)
     private String productCode;
 
     @Column(name = "product_name", nullable = false)
@@ -117,6 +117,10 @@ public class StagingProduct {
     @Column(name = "ai_categorization_json", columnDefinition = "jsonb")
     @Type(JsonType.class)
     private Map<String, Object> aiCategorizationJson;
+
+    // Keywords for search optimization
+    @Column(name = "keywords", columnDefinition = "text[]")
+    private List<String> keywords;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)

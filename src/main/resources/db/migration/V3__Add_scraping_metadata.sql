@@ -7,7 +7,7 @@ ADD COLUMN IF NOT EXISTS data_quality_score DECIMAL(3,2);
 
 -- Create scrape sources table to track configured websites
 CREATE TABLE IF NOT EXISTS scrape_sources (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     website_id VARCHAR(100) UNIQUE NOT NULL,
     website_name VARCHAR(255) NOT NULL,
     base_url TEXT NOT NULL,
@@ -20,8 +20,8 @@ CREATE TABLE IF NOT EXISTS scrape_sources (
 
 -- Create scrape logs table for tracking scrape jobs
 CREATE TABLE IF NOT EXISTS scrape_logs (
-    id SERIAL PRIMARY KEY,
-    source_id INTEGER REFERENCES scrape_sources(id) ON DELETE CASCADE,
+    id BIGSERIAL PRIMARY KEY,
+    source_id BIGINT REFERENCES scrape_sources(id) ON DELETE CASCADE,
     job_id VARCHAR(100) UNIQUE NOT NULL,
     status VARCHAR(50) NOT NULL, -- RUNNING, SUCCESS, FAILED, PARTIAL
     products_found INTEGER DEFAULT 0,

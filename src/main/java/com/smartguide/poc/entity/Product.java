@@ -65,6 +65,9 @@ public class Product {
     @Type(JsonType.class)
     private List<String> keyBenefits;
 
+    @Column(name = "keywords", columnDefinition = "text[]")
+    private List<String> keywords;
+
     @Column(name = "sharia_certified")
     private Boolean shariaCertified = true;
 

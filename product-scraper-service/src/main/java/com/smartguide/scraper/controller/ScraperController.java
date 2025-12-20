@@ -28,6 +28,66 @@ public class ScraperController {
 
     private final ScraperOrchestrationService orchestrationService;
     private final ScraperConfigLoader configLoader;
+    private final com.smartguide.scraper.service.BasicScraperService basicScraperService;
+    private final com.smartguide.scraper.service.EnhancedScraperService enhancedScraperService;
+
+    /**
+     * MVP1: Simple synchronous scraping endpoint
+     * Accepts any URL and returns scraped text content
+     */
+    @PostMapping("/scrape-url")
+    @Operation(summary = "Scrape any URL and extract text content (MVP1)")
+    public ResponseEntity<?> scrapeUrl(@RequestBody com.smartguide.scraper.dto.ScrapeRequest request) {
+        log.info("MVP1: Scraping URL: {}", request.getUrl());
+
+        try {
+            com.smartguide.scraper.dto.ScrapeResponse response = basicScraperService.scrapeUrl(request.getUrl());
+
+            if ("error".equals(response.getStatus())) {
+                return ResponseEntity.badRequest().body(response);
+            }
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Error in MVP1 scraping", e);
+            return ResponseEntity.internalServerError().body(
+                com.smartguide.scraper.dto.ScrapeResponse.builder()
+                    .url(request.getUrl())
+                    .status("error")
+                    .message("Internal server error: " + e.getMessage())
+                    .build()
+            );
+        }
+    }
+
+    /**
+     * MVP2: Enhanced scraping with AI analysis and product extraction
+     * Scrapes URL, checks if page has products, extracts details, saves to staging
+     */
+    @PostMapping("/scrape-url-enhanced")
+    @Operation(summary = "Scrape URL with AI analysis and extraction (MVP2)")
+    public ResponseEntity<?> scrapeUrlEnhanced(@RequestBody com.smartguide.scraper.dto.ScrapeRequest request) {
+        log.info("MVP2: Starting enhanced scraping for URL: {}", request.getUrl());
+
+        try {
+            com.smartguide.scraper.dto.ScrapeResponse response = enhancedScraperService.scrapeAndAnalyze(request.getUrl());
+
+            if ("error".equals(response.getStatus())) {
+                return ResponseEntity.badRequest().body(response);
+            }
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Error in MVP2 enhanced scraping", e);
+            return ResponseEntity.internalServerError().body(
+                com.smartguide.scraper.dto.ScrapeResponse.builder()
+                    .url(request.getUrl())
+                    .status("error")
+                    .message("Internal server error: " + e.getMessage())
+                    .build()
+            );
+        }
+    }
 
     @PostMapping("/trigger/{websiteId}")
     @Operation(summary = "Trigger scraping for a specific website")
@@ -76,8 +136,8 @@ public class ScraperController {
 
     @GetMapping("/sources")
     @Operation(summary = "Get all configured scrape sources")
-    public ResponseEntity<List<Object>> getAllSources() {
-        List<Object> sources = orchestrationService.getAllScrapeSources();
+    public ResponseEntity<List<Map<String, Object>>> getAllSources() {
+        List<Map<String, Object>> sources = orchestrationService.getAllScrapeSources();
         return ResponseEntity.ok(sources);
     }
 
@@ -93,8 +153,8 @@ public class ScraperController {
 
     @GetMapping("/history/{websiteId}")
     @Operation(summary = "Get scraping history for a website")
-    public ResponseEntity<List<Object>> getWebsiteHistory(@PathVariable String websiteId) {
-        List<Object> history = orchestrationService.getWebsiteScrapeHistory(websiteId);
+    public ResponseEntity<List<Map<String, Object>>> getWebsiteHistory(@PathVariable String websiteId) {
+        List<Map<String, Object>> history = orchestrationService.getWebsiteScrapeHistory(websiteId);
         return ResponseEntity.ok(history);
     }
 

@@ -18,50 +18,64 @@ import { PlayArrow, Refresh } from '@mui/icons-material';
 import { scraperApi } from '../services/api';
 
 const ScrapeForm = () => {
-  const [sources, setSources] = useState([]);
-  const [selectedSource, setSelectedSource] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [url, setUrl] = useState('');
+  const [urlError, setUrlError] = useState('');
   const [scraping, setScraping] = useState(false);
   const [message, setMessage] = useState(null);
-  const [jobId, setJobId] = useState(null);
+  const [scrapedData, setScrapedData] = useState(null);
 
-  useEffect(() => {
-    loadSources();
-  }, []);
-
-  const loadSources = async () => {
-    setLoading(true);
+  const validateUrl = (url) => {
     try {
-      const response = await scraperApi.getSources();
-      setSources(response.data);
+      const urlObj = new URL(url);
+      if (!['http:', 'https:'].includes(urlObj.protocol)) {
+        return 'URL must start with http:// or https://';
+      }
+      return '';
     } catch (error) {
-      setMessage({ type: 'error', text: 'Failed to load sources' });
-    } finally {
-      setLoading(false);
+      return 'Please enter a valid URL (e.g., https://example.com)';
     }
   };
 
-  const handleTriggerScrape = async () => {
-    if (!selectedSource) {
-      setMessage({ type: 'warning', text: 'Please select a website' });
+  const handleUrlChange = (e) => {
+    const inputUrl = e.target.value;
+    setUrl(inputUrl);
+    if (inputUrl) {
+      setUrlError(validateUrl(inputUrl));
+    } else {
+      setUrlError('');
+    }
+  };
+
+  const handleScrape = async () => {
+    // Validate URL
+    if (!url) {
+      setMessage({ type: 'warning', text: 'Please enter a website URL' });
+      return;
+    }
+
+    const error = validateUrl(url);
+    if (error) {
+      setUrlError(error);
+      setMessage({ type: 'error', text: error });
       return;
     }
 
     setScraping(true);
     setMessage(null);
-    setJobId(null);
+    setScrapedData(null);
 
     try {
-      const response = await scraperApi.triggerScrape(selectedSource);
-      setJobId(response.data.jobId);
+      // MVP2: Use enhanced scraping with AI analysis
+      const response = await scraperApi.scrapeUrlEnhanced(url);
+      setScrapedData(response.data);
       setMessage({
         type: 'success',
-        text: `Scraping started! Job ID: ${response.data.jobId}`,
+        text: response.data.message || `Successfully scraped ${response.data.textLength || 0} characters from the page!`,
       });
     } catch (error) {
       setMessage({
         type: 'error',
-        text: error.response?.data?.message || 'Failed to start scraping',
+        text: error.response?.data?.message || 'Failed to scrape the website',
       });
     } finally {
       setScraping(false);
@@ -77,21 +91,19 @@ const ScrapeForm = () => {
       <Card>
         <CardContent>
           <Box component="form" sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <FormControl fullWidth>
-              <InputLabel>Select Website</InputLabel>
-              <Select
-                value={selectedSource}
-                onChange={(e) => setSelectedSource(e.target.value)}
-                label="Select Website"
-                disabled={loading || scraping}
-              >
-                {sources.map((source) => (
-                  <MenuItem key={source.website_id} value={source.website_id}>
-                    {source.website_name} ({source.base_url})
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+            {/* URL Input */}
+            <TextField
+              fullWidth
+              label="Website URL"
+              placeholder="https://adib.ae/en/personal/cards"
+              value={url}
+              onChange={handleUrlChange}
+              disabled={scraping}
+              error={!!urlError}
+              helperText={urlError || 'Enter the full URL of the website to scrape (supports .com, .ae, .my, etc.)'}
+              required
+              autoFocus
+            />
 
             {message && (
               <Alert severity={message.type} onClose={() => setMessage(null)}>
@@ -102,39 +114,33 @@ const ScrapeForm = () => {
             {scraping && (
               <Box>
                 <Typography variant="body2" color="textSecondary" gutterBottom>
-                  Scraping in progress...
+                  Scraping website, analyzing with AI, and extracting products...
                 </Typography>
                 <LinearProgress />
               </Box>
             )}
 
-            <Box display="flex" gap={2}>
-              <Button
-                variant="contained"
-                startIcon={scraping ? <CircularProgress size={20} /> : <PlayArrow />}
-                onClick={handleTriggerScrape}
-                disabled={scraping || !selectedSource}
-                fullWidth
-              >
-                {scraping ? 'Scraping...' : 'Start Scraping'}
-              </Button>
+            <Button
+              variant="contained"
+              size="large"
+              startIcon={scraping ? <CircularProgress size={20} /> : <PlayArrow />}
+              onClick={handleScrape}
+              disabled={scraping || !url || !!urlError}
+              fullWidth
+            >
+              {scraping ? 'Scraping...' : 'Scrape Website'}
+            </Button>
 
-              <Button
-                variant="outlined"
-                startIcon={<Refresh />}
-                onClick={loadSources}
-                disabled={loading || scraping}
-              >
-                Refresh Sources
-              </Button>
-            </Box>
-
-            {jobId && (
-              <Alert severity="info">
+            {scrapedData && (
+              <Alert severity="success">
                 <Typography variant="body2">
-                  <strong>Job ID:</strong> {jobId}
+                  <strong>Scraping Complete!</strong>
                   <br />
-                  <small>Products will appear in the review tab when scraping completes.</small>
+                  • Page Title: {scrapedData.title || 'N/A'}
+                  <br />
+                  • Text Length: {scrapedData.textLength || 0} characters
+                  <br />
+                  • URL: {scrapedData.url}
                 </Typography>
               </Alert>
             )}

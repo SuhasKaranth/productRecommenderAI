@@ -50,6 +50,9 @@ public class StagingProductDTO {
     private BigDecimal aiConfidence;
     private Map<String, Object> aiCategorizationJson;
 
+    // Keywords
+    private List<String> keywords;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -82,8 +85,40 @@ public class StagingProductDTO {
                 .aiSuggestedCategory(entity.getAiSuggestedCategory())
                 .aiConfidence(entity.getAiConfidence())
                 .aiCategorizationJson(entity.getAiCategorizationJson())
+                .keywords(entity.getKeywords())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
+    }
+
+    public static StagingProduct toEntity(StagingProductDTO dto) {
+        StagingProduct entity = new StagingProduct();
+        entity.setId(dto.getId());
+        entity.setProductCode(dto.getProductCode());
+        entity.setProductName(dto.getProductName());
+        entity.setCategory(dto.getCategory());
+        entity.setSubCategory(dto.getSubCategory());
+        entity.setDescription(dto.getDescription());
+        entity.setIslamicStructure(dto.getIslamicStructure());
+        entity.setAnnualRate(dto.getAnnualRate());
+        entity.setAnnualFee(dto.getAnnualFee());
+        entity.setMinIncome(dto.getMinIncome());
+        entity.setMinCreditScore(dto.getMinCreditScore());
+        entity.setEligibilityCriteria(dto.getEligibilityCriteria());
+        entity.setKeyBenefits(dto.getKeyBenefits());
+        entity.setShariaCertified(dto.getShariaCertified());
+        entity.setActive(dto.getActive() != null ? dto.getActive() : true);
+        entity.setSourceWebsiteId(dto.getSourceWebsiteId());
+        entity.setSourceUrl(dto.getSourceUrl());
+        entity.setScrapedAt(dto.getScrapedAt() != null ? dto.getScrapedAt() : LocalDateTime.now());
+        entity.setDataQualityScore(dto.getDataQualityScore());
+        entity.setReviewedBy(dto.getReviewedBy());
+        entity.setReviewedAt(dto.getReviewedAt());
+        entity.setReviewNotes(dto.getReviewNotes());
+        entity.setAiSuggestedCategory(dto.getAiSuggestedCategory());
+        entity.setAiConfidence(dto.getAiConfidence());
+        entity.setAiCategorizationJson(dto.getAiCategorizationJson());
+        entity.setKeywords(dto.getKeywords());
+        return entity;
     }
 }

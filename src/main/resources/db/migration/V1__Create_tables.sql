@@ -1,6 +1,6 @@
 -- Products table
 CREATE TABLE IF NOT EXISTS products (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     product_code VARCHAR(50) UNIQUE NOT NULL,
     product_name VARCHAR(255) NOT NULL,
     category VARCHAR(100) NOT NULL,
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS products (
 
 -- Intent to Category Mapping table
 CREATE TABLE IF NOT EXISTS intent_category_mapping (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     intent VARCHAR(100) UNIQUE NOT NULL,
     primary_category VARCHAR(100) NOT NULL,
     secondary_categories VARCHAR(100)[] DEFAULT ARRAY[]::VARCHAR[],

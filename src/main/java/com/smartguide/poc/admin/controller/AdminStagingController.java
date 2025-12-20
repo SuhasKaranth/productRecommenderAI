@@ -22,7 +22,6 @@ import java.util.Map;
 @RequiredArgsConstructor
 @Slf4j
 @Tag(name = "Admin - Staging Products", description = "Manage staging products and approval workflow")
-@CrossOrigin(origins = "*")
 public class AdminStagingController {
 
     private final StagingProductService stagingProductService;
@@ -35,6 +34,14 @@ public class AdminStagingController {
                 ? stagingProductService.getAllPendingProducts()
                 : stagingProductService.getAllStagingProducts();
         return ResponseEntity.ok(products);
+    }
+
+    @PostMapping
+    @Operation(summary = "Create new staging product")
+    public ResponseEntity<StagingProductDTO> createStagingProduct(@RequestBody StagingProductDTO dto) {
+        log.info("Creating new staging product: {}", dto.getProductName());
+        StagingProductDTO created = stagingProductService.createStagingProduct(dto);
+        return ResponseEntity.ok(created);
     }
 
     @GetMapping("/{id}")
@@ -107,6 +114,24 @@ public class AdminStagingController {
         return ResponseEntity.ok(response);
     }
 
+    @PostMapping("/bulk-reject")
+    @Operation(summary = "Bulk reject multiple staging products")
+    public ResponseEntity<Map<String, Object>> bulkRejectProducts(
+            @RequestBody ApprovalRequest request) {
+        stagingProductService.bulkRejectProducts(
+                request.getProductIds(),
+                request.getReviewedBy() != null ? request.getReviewedBy() : "admin",
+                request.getReviewNotes()
+        );
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("message", "Products rejected successfully");
+        response.put("count", request.getProductIds().size());
+
+        return ResponseEntity.ok(response);
+    }
+
     @DeleteMapping("/{id}")
     @Operation(summary = "Delete staging product")
     public ResponseEntity<Map<String, Object>> deleteStagingProduct(@PathVariable Long id) {
@@ -120,6 +145,20 @@ public class AdminStagingController {
         return ResponseEntity.ok(response);
     }
 
+    @PostMapping("/bulk-delete")
+    @Operation(summary = "Bulk delete multiple staging products")
+    public ResponseEntity<Map<String, Object>> bulkDeleteProducts(
+            @RequestBody ApprovalRequest request) {
+        stagingProductService.bulkDeleteProducts(request.getProductIds());
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("message", "Products deleted successfully");
+        response.put("count", request.getProductIds().size());
+
+        return ResponseEntity.ok(response);
+    }
+
     @GetMapping("/stats")
     @Operation(summary = "Get staging product statistics")
     public ResponseEntity<Map<String, Object>> getStats() {
@@ -129,5 +168,33 @@ public class AdminStagingController {
         stats.put("rejected", stagingProductService.getRejectedCount());
 
         return ResponseEntity.ok(stats);
+    }
+
+    @PostMapping("/{id}/generate-keywords")
+    @Operation(summary = "Generate keywords for staging product using LLM")
+    public ResponseEntity<Map<String, Object>> generateKeywords(@PathVariable Long id) {
+        log.info("Generating keywords for product: {}", id);
+
+        List<String> keywords = stagingProductService.generateKeywords(id);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("keywords", keywords);
+        response.put("productId", id);
+
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/{id}/keywords")
+    @Operation(summary = "Save keywords for staging product")
+    public ResponseEntity<StagingProductDTO> saveKeywords(
+            @PathVariable Long id,
+            @RequestBody Map<String, List<String>> request) {
+        log.info("Saving keywords for product: {}", id);
+
+        List<String> keywords = request.get("keywords");
+        StagingProductDTO updated = stagingProductService.saveKeywords(id, keywords);
+
+        return ResponseEntity.ok(updated);
     }
 }

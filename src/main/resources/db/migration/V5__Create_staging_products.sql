@@ -1,6 +1,6 @@
 -- Create staging products table for review before production
 CREATE TABLE IF NOT EXISTS staging_products (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
 
     -- Product data (same structure as products table)
     product_code VARCHAR(50) NOT NULL,
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS staging_products (
     raw_html TEXT,
 
     -- Staging/approval metadata
-    scrape_log_id INTEGER REFERENCES scrape_logs(id) ON DELETE CASCADE,
+    scrape_log_id BIGINT REFERENCES scrape_logs(id) ON DELETE CASCADE,
     approval_status VARCHAR(20) DEFAULT 'PENDING', -- PENDING, APPROVED, REJECTED
     reviewed_by VARCHAR(100),
     reviewed_at TIMESTAMP,

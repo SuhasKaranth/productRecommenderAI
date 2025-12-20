@@ -10,6 +10,7 @@ import jakarta.persistence.criteria.Root;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -27,6 +28,13 @@ public class ProductService {
 
     private final ProductRepository productRepository;
     private final EntityManager entityManager;
+    private final LLMService llmService;
+
+    @org.springframework.beans.factory.annotation.Value("${app.ranking.llm.enabled:true}")
+    private boolean llmRankingEnabled;
+
+    @org.springframework.beans.factory.annotation.Value("${app.ranking.llm.max-products:10}")
+    private int maxProductsForLLM;
 
     /**
      * Get product recommendations based on filters and intent
@@ -34,7 +42,8 @@ public class ProductService {
     public List<Map<String, Object>> getRecommendations(
             Map<String, Object> filters,
             Map<String, Object> intentData,
-            Map<String, Object> categories) {
+            Map<String, Object> categories,
+            String userInput) {
 
         List<Product> products = queryProducts(filters);
 
@@ -43,12 +52,13 @@ public class ProductService {
             products = getFallbackProducts();
         }
 
-        // Add categories to intent data for ranking
+        // Add categories and user input to intent data for ranking
         Map<String, Object> enrichedIntentData = new HashMap<>(intentData);
         enrichedIntentData.put("primary_category", categories.get("primary"));
         enrichedIntentData.put("secondary_categories", categories.get("secondary"));
+        enrichedIntentData.put("user_input", userInput != null ? userInput.toLowerCase() : "");
 
-        List<Map<String, Object>> rankedProducts = rankProducts(products, enrichedIntentData);
+        List<Map<String, Object>> rankedProducts = rankProducts(products, enrichedIntentData, userInput);
 
         // Return top 5
         return rankedProducts.stream().limit(5).collect(Collectors.toList());
@@ -125,9 +135,48 @@ public class ProductService {
     }
 
     /**
-     * Rank products based on relevance to intent
+     * Rank products using two-stage approach: formula-based pre-filtering + LLM re-ranking
      */
-    private List<Map<String, Object>> rankProducts(List<Product> products, Map<String, Object> intentData) {
+    private List<Map<String, Object>> rankProducts(List<Product> products, Map<String, Object> intentData, String userInput) {
+        // Stage 1: Get top candidates using formula-based ranking
+        log.info("Stage 1: Formula-based ranking of {} products", products.size());
+        List<Map<String, Object>> formulaRanked = rankProductsWithFormula(products, intentData);
+
+        List<Map<String, Object>> topCandidates = formulaRanked.stream()
+                .limit(maxProductsForLLM)
+                .collect(Collectors.toList());
+
+        log.info("Formula ranking completed. Top {} candidates selected for LLM re-ranking", topCandidates.size());
+
+        // Stage 2: LLM re-ranking of top candidates
+        if (llmRankingEnabled && !topCandidates.isEmpty()) {
+            try {
+                log.info("Stage 2: LLM re-ranking enabled, processing {} products", topCandidates.size());
+                List<Product> topProducts = topCandidates.stream()
+                        .map(item -> (Product) item.get("product"))
+                        .collect(Collectors.toList());
+
+                List<Map<String, Object>> llmRanked = llmService.rankProductsWithLLM(
+                        topProducts, userInput, intentData);
+
+                log.info("LLM re-ranking completed successfully");
+                return llmRanked;
+
+            } catch (Exception e) {
+                log.warn("LLM re-ranking failed, using formula-based results: {}", e.getMessage());
+            }
+        } else {
+            log.info("LLM ranking disabled, using formula-based results");
+        }
+
+        // Fallback: Return formula-based results
+        return topCandidates;
+    }
+
+    /**
+     * Rank products based on relevance to intent using formula-based scoring
+     */
+    private List<Map<String, Object>> rankProductsWithFormula(List<Product> products, Map<String, Object> intentData) {
         List<Map<String, Object>> scoredProducts = new ArrayList<>();
 
         for (Product product : products) {
@@ -153,10 +202,11 @@ public class ProductService {
     /**
      * Calculate relevance score for a product
      * Ranking formula:
-     * - Category match: 50%
-     * - Recency: 20%
-     * - Popularity: 15%
-     * - Benefit alignment: 15%
+     * - Category match: 40%
+     * - Specific keyword match: 30% (NEW - matches user's specific query keywords)
+     * - Recency: 15%
+     * - Popularity: 10%
+     * - Benefit alignment: 5%
      */
     @SuppressWarnings("unchecked")
     private double calculateRelevanceScore(Product product, Map<String, Object> intentData) {
@@ -164,47 +214,100 @@ public class ProductService {
 
         String primaryCategory = (String) intentData.get("primary_category");
         List<String> secondaryCategories = (List<String>) intentData.get("secondary_categories");
+        String userInput = (String) intentData.get("user_input");
 
-        // 1. Category match (50%)
+        // 1. Category match (40%)
         if (product.getCategory().equals(primaryCategory)) {
-            score += 0.50;
+            score += 0.40;
         } else if (secondaryCategories != null && secondaryCategories.contains(product.getCategory())) {
-            score += 0.35;
-        } else {
-            score += 0.10;
-        }
-
-        // 2. Recency (20%)
-        if (product.getCreatedAt() != null) {
-            long daysOld = ChronoUnit.DAYS.between(product.getCreatedAt(), LocalDateTime.now());
-            if (daysOld < 30) {
-                score += 0.20;
-            } else if (daysOld < 90) {
-                score += 0.15;
-            } else {
-                score += 0.10;
-            }
-        } else {
-            score += 0.10;
-        }
-
-        // 3. Popularity (15%) - Simplified for POC
-        List<String> popularProducts = Arrays.asList("CC_TRAVEL_01", "CASA_SAV_01", "FIN_HOME_01");
-        if (popularProducts.contains(product.getProductCode())) {
-            score += 0.15;
+            score += 0.28;
         } else {
             score += 0.08;
         }
 
-        // 4. Benefit alignment (15%)
-        String intent = (String) intentData.get("intent");
-        if (checkBenefitAlignment(product, intent)) {
-            score += 0.15;
+        // 2. Specific keyword match (30%) - Check if user's query keywords match product keywords/benefits
+        if (userInput != null && !userInput.isEmpty()) {
+            double keywordMatchScore = checkSpecificKeywordMatch(product, userInput);
+            score += keywordMatchScore * 0.30;
         } else {
             score += 0.05;
         }
 
+        // 3. Recency (15%)
+        if (product.getCreatedAt() != null) {
+            long daysOld = ChronoUnit.DAYS.between(product.getCreatedAt(), LocalDateTime.now());
+            if (daysOld < 30) {
+                score += 0.15;
+            } else if (daysOld < 90) {
+                score += 0.11;
+            } else {
+                score += 0.08;
+            }
+        } else {
+            score += 0.08;
+        }
+
+        // 4. Popularity (10%) - Simplified for POC
+        List<String> popularProducts = Arrays.asList("CC_TRAVEL_01", "CASA_SAV_01", "FIN_HOME_01");
+        if (popularProducts.contains(product.getProductCode())) {
+            score += 0.10;
+        } else {
+            score += 0.05;
+        }
+
+        // 5. Benefit alignment (5%)
+        String intent = (String) intentData.get("intent");
+        if (checkBenefitAlignment(product, intent)) {
+            score += 0.05;
+        } else {
+            score += 0.02;
+        }
+
         return Math.min(1.0, Math.max(0.0, score));
+    }
+
+    /**
+     * Check if product keywords or benefits match specific user query keywords
+     * Returns a score between 0.0 and 1.0 based on match quality
+     */
+    private double checkSpecificKeywordMatch(Product product, String userInput) {
+        double matchScore = 0.0;
+        String[] userKeywords = userInput.toLowerCase()
+                .replaceAll("[^a-z0-9\\s]", "")
+                .split("\\s+");
+
+        // Check against product keywords (if available)
+        if (product.getKeywords() != null && !product.getKeywords().isEmpty()) {
+            String productKeywordsText = String.join(" ", product.getKeywords()).toLowerCase();
+
+            for (String userKeyword : userKeywords) {
+                if (userKeyword.length() >= 3 && productKeywordsText.contains(userKeyword)) {
+                    matchScore += 0.4; // Strong match in keywords
+                }
+            }
+        }
+
+        // Check against product benefits
+        if (product.getKeyBenefits() != null && !product.getKeyBenefits().isEmpty()) {
+            String benefitsText = String.join(" ", product.getKeyBenefits()).toLowerCase();
+
+            for (String userKeyword : userKeywords) {
+                if (userKeyword.length() >= 3 && benefitsText.contains(userKeyword)) {
+                    matchScore += 0.3; // Good match in benefits
+                }
+            }
+        }
+
+        // Check against product name
+        String productName = product.getProductName().toLowerCase();
+        for (String userKeyword : userKeywords) {
+            if (userKeyword.length() >= 3 && productName.contains(userKeyword)) {
+                matchScore += 0.2; // Decent match in product name
+            }
+        }
+
+        // Cap at 1.0
+        return Math.min(1.0, matchScore);
     }
 
     /**
@@ -243,30 +346,111 @@ public class ProductService {
                 ? product.getIslamicStructure()
                 : "Sharia-compliant";
 
+        // Get product-specific highlight
+        String productHighlight = getProductHighlight(product, intent);
+
         Map<String, String> reasonTemplates = Map.of(
-                "TRAVEL", "Perfect for travelers with %s structure and travel benefits",
-                "LOAN", "Flexible %s financing to meet your needs",
-                "SAVINGS", "Grow your wealth with %s profit-sharing",
-                "INVESTMENT", "Build your portfolio with %s investment",
-                "CAR", "Drive your dream car with %s auto financing",
-                "HOME", "Own your home through %s partnership",
-                "EDUCATION", "Invest in education with %s financing",
-                "BUSINESS", "Grow your business with %s solutions",
-                "INSURANCE", "Comprehensive protection through %s",
-                "PAYMENT", "Convenient payments with %s structure"
+                "TRAVEL", "Perfect for travelers with %s structure - %s",
+                "LOAN", "Flexible %s financing - %s",
+                "SAVINGS", "Grow your wealth with %s profit-sharing - %s",
+                "INVESTMENT", "Build your portfolio with %s investment - %s",
+                "CAR", "Drive your dream car with %s auto financing - %s",
+                "HOME", "Own your home through %s partnership - %s",
+                "EDUCATION", "Invest in education with %s financing - %s",
+                "BUSINESS", "Grow your business with %s solutions - %s",
+                "INSURANCE", "Comprehensive protection through %s - %s",
+                "PAYMENT", "Convenient payments with %s structure - %s"
         );
 
-        String baseReason = String.format(
-                reasonTemplates.getOrDefault(intent,
-                        "Sharia-compliant " + product.getCategory().replace("_", " ").toLowerCase()),
-                structure
-        );
+        String template = reasonTemplates.getOrDefault(intent,
+                "Sharia-compliant " + product.getCategory().replace("_", " ").toLowerCase() + " - %s");
 
-        Double confidence = (Double) intentData.get("confidence");
-        if (confidence != null && confidence > 0.8) {
-            baseReason += " - Highly relevant to your needs";
+        return String.format(template, structure, productHighlight);
+    }
+
+    /**
+     * Get product-specific highlight based on key benefits and product name
+     */
+    private String getProductHighlight(Product product, String intent) {
+        List<String> benefits = product.getKeyBenefits();
+
+        // If product has benefits, extract a relevant one
+        if (benefits != null && !benefits.isEmpty()) {
+            // Try to find benefit matching the intent
+            Map<String, List<String>> intentKeywords = Map.of(
+                    "TRAVEL", Arrays.asList("travel", "international", "forex", "cashback", "lounge"),
+                    "BUSINESS", Arrays.asList("business", "corporate", "expense", "limit", "employee"),
+                    "PAYMENT", Arrays.asList("cashback", "rewards", "points", "fee", "supplementary")
+            );
+
+            List<String> keywords = intentKeywords.getOrDefault(intent, Collections.emptyList());
+
+            // Find first benefit containing any keyword
+            for (String benefit : benefits) {
+                String lowerBenefit = benefit.toLowerCase();
+                for (String keyword : keywords) {
+                    if (lowerBenefit.contains(keyword)) {
+                        return benefit;
+                    }
+                }
+            }
+
+            // If no keyword match, return first benefit
+            return benefits.get(0);
         }
 
-        return baseReason;
+        // Fallback to product name highlight
+        String productName = product.getProductName().toLowerCase();
+        if (productName.contains("travel")) {
+            return "ideal for frequent travelers";
+        } else if (productName.contains("business")) {
+            return "designed for business needs";
+        } else if (productName.contains("cashback") || productName.contains("rewards")) {
+            return "earn rewards on every purchase";
+        } else if (productName.contains("student") || productName.contains("campus")) {
+            return "perfect for students";
+        } else if (productName.contains("platinum") || productName.contains("elite")) {
+            return "premium benefits and privileges";
+        }
+
+        return "meets your financial needs";
+    }
+
+    /**
+     * Generate keywords for a product using LLM
+     */
+    public List<String> generateKeywords(Long id) {
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Product not found: " + id));
+
+        log.info("Generating keywords for product: {}", product.getProductName());
+
+        // Convert Product to a map format that LLMService can use
+        Map<String, Object> productData = new HashMap<>();
+        productData.put("productName", product.getProductName());
+        productData.put("category", product.getCategory());
+        productData.put("description", product.getDescription());
+        productData.put("islamicStructure", product.getIslamicStructure());
+        productData.put("keyBenefits", product.getKeyBenefits());
+
+        List<String> keywords = llmService.generateKeywordsFromMap(productData);
+        log.info("Generated {} keywords: {}", keywords.size(), keywords);
+
+        return keywords;
+    }
+
+    /**
+     * Save keywords for a product
+     */
+    @Transactional
+    public Product saveKeywords(Long id, List<String> keywords) {
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Product not found: " + id));
+
+        product.setKeywords(keywords);
+        Product saved = productRepository.save(product);
+
+        log.info("Saved {} keywords for product: {}", keywords.size(), product.getProductName());
+        return saved;
     }
 }

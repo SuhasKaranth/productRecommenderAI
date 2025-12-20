@@ -74,11 +74,12 @@ public class RecommendationController {
                     request.getUserContext()
             );
 
-            // Step 4: Get and rank products
+            // Step 4: Get and rank products (pass user input for keyword matching)
             List<Map<String, Object>> rankedProducts = productService.getRecommendations(
                     filters,
                     intentData,
-                    categories
+                    categories,
+                    request.getUserInput()
             );
 
             // Step 5: Build response
