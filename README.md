@@ -1,4 +1,4 @@
-# Smart Guide POC - Islamic Banking Product Recommendation System
+# Smart Guide POC - Banking Product Recommendation System
 
 AI-powered Islamic banking product recommendation system with automated web scraping, staging workflow, and intelligent product recommendations based on natural language input.
 
