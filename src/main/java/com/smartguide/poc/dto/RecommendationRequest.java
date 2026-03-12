@@ -19,6 +19,7 @@ public class RecommendationRequest {
 
     @NotBlank(message = "User input cannot be empty")
     @Size(min = 1, max = 500, message = "User input must be between 1 and 500 characters")
+    @Pattern(regexp = "^[^<>{}\\[\\]]*$", message = "Input contains invalid characters")
     @Schema(description = "Natural language input from user", example = "I want to travel to Brazil")
     private String userInput;
 

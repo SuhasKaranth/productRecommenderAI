@@ -1,0 +1,74 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+  flyway:
+    enabled: false
+
+# Disable API key authentication for tests — SecurityConfig
+# reads this via ApiKeyProperties
+security:
+  api-key:
+    enabled: false
+    header-name: X-API-Key
+    admin-keys:
+    user-keys:
+    scoped-keys:
+
+app:
+  cors:
+    allowed-origins: http://localhost:3000
+    allowed-headers: Content-Type,X-API-Key
+    exposed-headers: X-Correlation-ID
+
+  llm:
+    provider: ollama
+    azure:
+      endpoint: http://test-azure-endpoint
+      api-key: test-azure-key
+      deployment-name: test-deployment
+      api-version: 2024-02-15-preview
+    ollama:
+      host: http://localhost:11434
+      model: llama3.2
+      timeout: 5000
+
+  recommendation:
+    max-results: 5
+    confidence-threshold: 0.5
+
+  ranking:
+    llm:
+      enabled: false
+      timeout-ms: 5000
+      fallback-to-formula: true
+      max-products: 10
+
+  dev-services:
+    enabled: false
+    frontend:
+      enabled: false
+    scraper:
+      enabled: false
+
+  keywords:
+    generation:
+      system-prompt: "Test keyword system prompt for Islamic finance products."
+      max-keywords: 10
+      timeout-seconds: 5
+
+logging:
+  level:
+    root: WARN
+    com.smartguide: DEBUG

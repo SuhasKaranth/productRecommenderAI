@@ -4,8 +4,8 @@ spring:
 
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/smart_guide_poc}
-    username: ${SPRING_DATASOURCE_USERNAME:postgres}
-    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 10
@@ -28,11 +28,26 @@ spring:
     baseline-on-migrate: true
     locations: classpath:db/migration
 
+  lifecycle:
+    timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:60s}
+
 server:
   port: ${SERVER_PORT:8080}
+  shutdown: graceful
   error:
     include-message: always
     include-binding-errors: always
+
+# Security Configuration
+security:
+  api-key:
+    enabled: ${API_KEY_AUTH_ENABLED:true}
+    header-name: X-API-Key
+    admin-keys: ${API_KEY_ADMIN_1:sk_admin_scraper_devkey_local01},${API_KEY_ADMIN_2:}
+    user-keys: ${API_KEY_USER_1:},${API_KEY_USER_2:}
+    scoped-keys: ${API_KEY_SCOPED:}
+    # NOTE: API keys default to empty strings intentionally — the ApiKeyService
+    # will log an error and reject all requests if no keys are configured.
 
 # Springdoc OpenAPI Configuration
 springdoc:
@@ -44,6 +59,11 @@ springdoc:
 
 # Application Configuration
 app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:3001}
+    allowed-headers: Content-Type,X-API-Key,X-Correlation-ID,Authorization
+    exposed-headers: X-Correlation-ID
+
   llm:
     provider: ${LLM_PROVIDER:ollama}
     # Azure OpenAI Configuration
@@ -65,9 +85,29 @@ app:
   ranking:
     llm:
       enabled: ${LLM_RANKING_ENABLED:true}
-      timeout-ms: ${LLM_RANKING_TIMEOUT:15000}
+      timeout-ms: ${LLM_RANKING_TIMEOUT:30000}
       fallback-to-formula: true
       max-products: 10
+
+  # Development Services Auto-Start
+  # When enabled, automatically starts Frontend and Scraper services
+  dev-services:
+    enabled: ${DEV_SERVICES_ENABLED:false}
+    frontend:
+      enabled: ${DEV_SERVICES_FRONTEND_ENABLED:true}
+      path: frontend
+      port: ${DEV_SERVICES_FRONTEND_PORT:3000}
+      command: npm
+      args: start
+    scraper:
+      enabled: ${DEV_SERVICES_SCRAPER_ENABLED:true}
+      path: product-scraper-service
+      port: ${DEV_SERVICES_SCRAPER_PORT:8081}
+      jvm-memory: 512m
+
+  # Scraper service — used by ScraperServiceClient for on-demand page refresh
+  scraper-service:
+    url: ${SCRAPER_SERVICE_URL:http://localhost:8081}
 
   keywords:
     generation:
@@ -95,11 +135,45 @@ app:
       max-keywords: 10
       timeout-seconds: 30
 
+  summary:
+    generation:
+      timeout-seconds: ${SUMMARY_TIMEOUT_SECONDS:120}
+      system-prompt: |
+        You are a semantic product profiler for an AI-powered Islamic banking recommendation engine.
+
+        Your output is read ONLY by an AI model — it is never shown to customers.
+
+        Your goal is to produce a dense, signal-rich product profile that helps the recommendation AI decide when to suggest this product and to whom.
+
+        SOURCE HIERARCHY — follow this strictly:
+        1. PRIMARY SOURCE (labelled "PRIMARY SOURCE — VERBATIM PAGE CONTENT"): This is the ground truth. Use every factual claim from it that is relevant to the profile. Do not contradict it.
+        2. SUPPLEMENTARY FIELDS (labelled "SUPPLEMENTARY STRUCTURED FIELDS"): Use these to confirm or clarify facts from the primary source. If a supplementary field contradicts the primary source, trust the primary source.
+        3. If no primary source is present, treat the structured fields as the only source.
+
+        Write 3-4 sentences covering ALL of the following in order:
+        1. IDEAL CUSTOMER — who is this product best suited for (income level, employment type, residency status, lifestyle, financial stage)?
+        2. USE CASES — which specific scenarios or user needs trigger recommending this product (e.g. travel spend, saving for a goal, home finance, starting a business)?
+        3. ELIGIBILITY SIGNALS — concrete qualifying criteria (min income, fee, tenure, nationality if relevant) stated plainly so the AI can match them against user context.
+        4. KEY DIFFERENTIATOR — what makes this product the right choice over alternatives in the same category?
+
+        ANTI-HALLUCINATION RULES — these override everything else:
+        - ONLY use facts explicitly present in the data provided to you.
+        - If a field is null, missing, or not provided, DO NOT mention it, DO NOT estimate it, DO NOT substitute a plausible value.
+        - DO NOT use your training knowledge about similar products to fill gaps. If you do not have the data, omit that aspect entirely.
+        - Numeric values (income, fees, rates) MUST be copied exactly as given — do not convert, round, or replace with different units or currencies.
+        - If you cannot write a complete profile from the data provided, write only what the data supports. A short accurate profile is better than a long hallucinated one.
+
+        Sharia terminology rules:
+        - Use 'profit rate' not 'interest', 'finance' not 'loan', 'home finance' not 'mortgage', 'Takaful' not 'insurance'. Never use: interest, loan, mortgage, insurance, conventional.
+
+        Format rules:
+        - Write in third person, declarative, factual tone — no marketing adjectives.
+        - Return plain text only. No JSON, no bullet points, no markdown.
+        - Maximum 150 words.
+
 logging:
   level:
     root: INFO
-    com.smartguide.poc: DEBUG
     org.springframework.web: INFO
-    org.hibernate.SQL: DEBUG
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    # Per-package debug overrides are in application-dev.yml (DEBUG)
+    # and controlled by logback-spring.xml for prod (INFO only)

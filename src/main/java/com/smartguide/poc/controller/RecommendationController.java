@@ -51,8 +51,10 @@ public class RecommendationController {
         long startTime = System.currentTimeMillis();
 
         try {
-            log.info("Processing recommendation request: {}...",
-                    request.getUserInput().substring(0, Math.min(50, request.getUserInput().length())));
+            int inputLen = request.getUserInput().length();
+            log.info("Processing recommendation request: [REDACTED - length: {} chars]", inputLen);
+            log.debug("Recommendation input preview: {}...",
+                    request.getUserInput().substring(0, Math.min(50, inputLen)));
 
             // Step 1: Extract intent using LLM
             Map<String, Object> intentData = llmService.extractIntent(
@@ -136,7 +138,10 @@ public class RecommendationController {
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            log.error("Error processing recommendation: {}", e.getMessage(), e);
+            // Log message only at ERROR; full stack trace at DEBUG to avoid leaking user data in prod logs.
+            log.error("Error processing recommendation request (see DEBUG for stack trace): {}",
+                    e.getClass().getSimpleName());
+            log.debug("Recommendation error detail", e);
 
             long processingTimeMs = System.currentTimeMillis() - startTime;
 

@@ -40,6 +40,7 @@ springdoc:
 app:
   main-service:
     url: ${MAIN_SERVICE_URL:http://localhost:8080}
+    api-key: ${MAIN_SERVICE_API_KEY:sk_admin_scraper_devkey_local01}
 
 logging:
   level:

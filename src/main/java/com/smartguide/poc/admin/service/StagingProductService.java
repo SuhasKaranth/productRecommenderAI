@@ -131,9 +131,10 @@ public class StagingProductService {
     }
 
     /**
-     * Bulk approve multiple staging products
+     * Bulk approve multiple staging products.
+     * No outer @Transactional — each approveStagingProduct runs in its own transaction so
+     * a failure on one product does not roll back the others.
      */
-    @Transactional
     public void bulkApproveProducts(List<Long> productIds, String reviewedBy, String reviewNotes) {
         for (Long id : productIds) {
             try {
@@ -171,9 +172,9 @@ public class StagingProductService {
     }
 
     /**
-     * Bulk reject multiple staging products
+     * Bulk reject multiple staging products.
+     * No outer @Transactional — each rejectStagingProduct runs in its own transaction.
      */
-    @Transactional
     public void bulkRejectProducts(List<Long> productIds, String reviewedBy, String reviewNotes) {
         for (Long id : productIds) {
             try {
@@ -185,9 +186,9 @@ public class StagingProductService {
     }
 
     /**
-     * Bulk delete multiple staging products
+     * Bulk delete multiple staging products.
+     * No outer @Transactional — each deleteStagingProduct runs in its own transaction.
      */
-    @Transactional
     public void bulkDeleteProducts(List<Long> productIds) {
         for (Long id : productIds) {
             try {
@@ -259,12 +260,15 @@ public class StagingProductService {
         product.setEligibilityCriteria(staging.getEligibilityCriteria());
         product.setKeyBenefits(staging.getKeyBenefits());
         product.setKeywords(staging.getKeywords());
-        product.setShariaCertified(staging.getShariaCertified());
-        product.setActive(staging.getActive());
+        // Default shariaCertified to true — all products in this system are Sharia-compliant.
+        // Scraped products don't carry this flag explicitly; null would exclude them from all queries.
+        product.setShariaCertified(staging.getShariaCertified() != null ? staging.getShariaCertified() : Boolean.TRUE);
+        product.setActive(staging.getActive() != null ? staging.getActive() : Boolean.TRUE);
         product.setSourceWebsiteId(staging.getSourceWebsiteId());
         product.setSourceUrl(staging.getSourceUrl());
         product.setScrapedAt(staging.getScrapedAt());
         product.setDataQualityScore(staging.getDataQualityScore());
+        product.setRawPageContent(staging.getRawPageContent());
     }
 
     /**

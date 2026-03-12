@@ -1,0 +1,257 @@
+version: '3.8'
+
+# ============================================================================
+# Smart Guide POC - Product Recommendation System
+# Docker Compose Configuration
+# ============================================================================
+# This file orchestrates:
+#   - PostgreSQL database
+#   - Main Spring Boot application
+#   - (Optional) Product scraper service
+#
+# USAGE:
+#   Start:    docker-compose up -d
+#   Stop:     docker-compose down
+#   Logs:     docker-compose logs -f app
+#   Rebuild:  docker-compose up -d --build
+#   Clean:    docker-compose down -v (WARNING: deletes database!)
+# ============================================================================
+
+services:
+  # ==========================================================================
+  # PostgreSQL Database Service
+  # ==========================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: smartguide-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-smart_guide_poc}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+    volumes:
+      # Persistent data storage
+      - postgres_data:/var/lib/postgresql/data
+      # Optional: Custom initialization scripts
+      # - ./init-scripts:/docker-entrypoint-initdb.d
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-smart_guide_poc}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    networks:
+      - smartguide-network
+
+    # Resource limits (adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # ==========================================================================
+  # Main Application Service
+  # ==========================================================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - JAR_FILE=target/product-recommender-poc-1.0.0.jar
+
+    image: smartguide/app:latest
+    container_name: smartguide-app
+    restart: unless-stopped
+
+    # Load environment variables from .env.docker
+    env_file:
+      - .env.docker
+
+    # Additional environment variables (override .env.docker if needed)
+    environment:
+      # Database connection (use postgres service name as hostname)
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-smart_guide_poc}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+
+      # Wait for database to be ready
+      SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT: 60000
+
+      # Application settings
+      SERVER_PORT: 8080
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-docker}
+
+      # JVM Settings
+      JAVA_OPTS: ${JAVA_OPTS:--Xmx1g -Xms512m -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0}
+
+    ports:
+      - "${APP_PORT:-8080}:8080"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    networks:
+      - smartguide-network
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+
+    # Optional: Mount logs directory
+    volumes:
+      - app_logs:/app/logs
+
+  # ==========================================================================
+  # Product Scraper Service (OPTIONAL - uncomment to enable)
+  # ==========================================================================
+  # scraper:
+  #   build:
+  #     context: ./product-scraper-service
+  #     dockerfile: Dockerfile
+  #
+  #   image: smartguide/scraper:latest
+  #   container_name: smartguide-scraper
+  #   restart: unless-stopped
+  #
+  #   env_file:
+  #     - .env.docker
+  #
+  #   environment:
+  #     SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-smart_guide_poc}
+  #     SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+  #     SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+  #     SERVER_PORT: 8081
+  #
+  #   ports:
+  #     - "${SCRAPER_PORT:-8081}:8081"
+  #
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #
+  #   networks:
+  #     - smartguide-network
+  #
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '2.0'
+  #         memory: 2G
+  #       reservations:
+  #         cpus: '1.0'
+  #         memory: 1G
+
+  # ==========================================================================
+  # Redis Cache (OPTIONAL - uncomment for future caching layer)
+  # ==========================================================================
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: smartguide-redis
+  #   restart: unless-stopped
+  #
+  #   ports:
+  #     - "${REDIS_PORT:-6379}:6379"
+  #
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #
+  #   networks:
+  #     - smartguide-network
+  #
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '0.5'
+  #         memory: 256M
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  smartguide-network:
+    name: smartguide-network
+    driver: bridge
+
+# ============================================================================
+# Volumes (Persistent Data Storage)
+# ============================================================================
+volumes:
+  # PostgreSQL data - survives container restarts
+  postgres_data:
+    name: smartguide-postgres-data
+    driver: local
+
+  # Application logs (optional)
+  app_logs:
+    name: smartguide-app-logs
+    driver: local
+
+# ============================================================================
+# NOTES:
+# ============================================================================
+# 1. First time setup:
+#    - Copy .env.docker.example to .env.docker
+#    - Update API keys and passwords in .env.docker
+#    - Run: docker-compose up -d
+#
+# 2. Database data is persisted in 'postgres_data' volume
+#    - To reset database: docker-compose down -v
+#    - To backup: docker exec smartguide-postgres pg_dump -U postgres smart_guide_poc > backup.sql
+#    - To restore: docker exec -i smartguide-postgres psql -U postgres smart_guide_poc < backup.sql
+#
+# 3. View logs:
+#    - All services: docker-compose logs -f
+#    - Specific service: docker-compose logs -f app
+#    - Last 100 lines: docker-compose logs --tail=100 app
+#
+# 4. Access services:
+#    - Main App: http://localhost:8080
+#    - Admin UI: http://localhost:8080/ui
+#    - API Docs: http://localhost:8080/docs
+#    - Health Check: http://localhost:8080/health
+#    - Database: localhost:5432 (use psql or pgAdmin)
+#
+# 5. Troubleshooting:
+#    - Check service status: docker-compose ps
+#    - Check service health: docker-compose ps app
+#    - Restart service: docker-compose restart app
+#    - Rebuild: docker-compose up -d --build
+#    - Access container shell: docker-compose exec app sh
+#
+# 6. Production considerations:
+#    - Use docker-compose.prod.yml for production overrides
+#    - Set strong passwords in .env.docker
+#    - Configure reverse proxy (nginx) for HTTPS
+#    - Set up monitoring and backups
+#    - Use Docker secrets for sensitive data
+#    - Configure log rotation
+# ============================================================================

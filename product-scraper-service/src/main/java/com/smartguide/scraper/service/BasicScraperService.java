@@ -35,10 +35,16 @@ public class BasicScraperService {
 
             log.info("Scraping URL: {}", url);
 
-            // Navigate to the URL
+            // Navigate to the URL.
+            // NETWORKIDLE is avoided because modern SPAs (React, Angular) keep
+            // making background API calls so the network never goes fully idle,
+            // causing guaranteed timeouts on banking sites.
+            // LOAD fires once the browser's load event fires (all resources fetched).
+            // The 3-second post-load wait lets JS frameworks finish rendering.
             page.navigate(url, new Page.NavigateOptions()
-                .setTimeout(30000) // 30 second timeout
-                .setWaitUntil(WaitUntilState.NETWORKIDLE));
+                .setTimeout(60000)
+                .setWaitUntil(WaitUntilState.LOAD));
+            page.waitForTimeout(3000); // allow React/JS to render dynamic content
 
             // Extract page title
             String title = page.title();

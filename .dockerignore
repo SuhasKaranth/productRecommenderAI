@@ -1,0 +1,186 @@
+# ============================================================================
+# Docker Ignore File
+# ============================================================================
+# Excludes files from Docker build context to:
+#   - Speed up builds (smaller context)
+#   - Reduce image size
+#   - Prevent sensitive files from being included
+# ============================================================================
+
+# ============================================================================
+# Build Artifacts & Compiled Code
+# ============================================================================
+target/
+*.jar
+*.war
+*.ear
+*.class
+*.pyc
+*.pyo
+
+# Maven wrapper (we install maven in Docker)
+.mvn/
+mvnw
+mvnw.cmd
+
+# ============================================================================
+# IDE Files & Settings
+# ============================================================================
+.idea/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+.vscode/
+*.sublime-*
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ============================================================================
+# Environment & Configuration Files (SECURITY)
+# ============================================================================
+.env
+.env.*
+!.env.example
+!.env.docker.example
+*.local
+application-local.yml
+application-local.properties
+
+# Secrets
+secrets/
+*.key
+*.pem
+*.p12
+*.jks
+credentials.json
+
+# ============================================================================
+# Frontend Build Artifacts
+# ============================================================================
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+frontend/.next/
+frontend/out/
+frontend/coverage/
+
+# Frontend package locks (rebuilt in Docker)
+frontend/package-lock.json
+frontend/yarn.lock
+frontend/pnpm-lock.yaml
+
+# ============================================================================
+# Git & Version Control
+# ============================================================================
+.git/
+.gitignore
+.gitattributes
+.github/
+.gitlab-ci.yml
+
+# ============================================================================
+# Documentation
+# ============================================================================
+*.md
+!README.md
+docs/
+*.txt
+*.pdf
+LICENSE
+CONTRIBUTING.md
+CHANGELOG.md
+
+# ============================================================================
+# Logs & Temporary Files
+# ============================================================================
+*.log
+logs/
+*.log.*
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+.history/
+
+# ============================================================================
+# Docker Files (Don't need these inside the image)
+# ============================================================================
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# ============================================================================
+# Testing & Coverage
+# ============================================================================
+coverage/
+.nyc_output/
+htmlcov/
+.coverage
+.pytest_cache/
+.jacoco/
+jacoco.exec
+
+# ============================================================================
+# Database Files
+# ============================================================================
+*.sql
+!src/main/resources/db/migration/*.sql
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================================================
+# Claude Code & AI Tools
+# ============================================================================
+.claude/
+.cursor/
+*.ai
+
+# ============================================================================
+# OS Files
+# ============================================================================
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+._*
+.Spotlight-V100
+.Trashes
+
+# ============================================================================
+# Backup Files
+# ============================================================================
+*.backup
+*.old
+*.orig
+*-backup
+*-old
+
+# ============================================================================
+# Scripts & Build Tools (not needed in runtime)
+# ============================================================================
+*.sh
+!docker-entrypoint.sh
+*.bat
+*.cmd
+
+# ============================================================================
+# NOTES:
+# ============================================================================
+# Lines starting with ! are exceptions (include these files)
+# Examples:
+#   *.md         - Excludes all markdown files
+#   !README.md   - But includes README.md
+#
+# To test what will be included in Docker context:
+#   docker build --dry-run .
+#
+# To see actual context size:
+#   docker build --no-cache . 2>&1 | grep "Sending build context"
+# ============================================================================

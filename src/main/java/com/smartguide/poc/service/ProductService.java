@@ -29,6 +29,7 @@ public class ProductService {
     private final ProductRepository productRepository;
     private final EntityManager entityManager;
     private final LLMService llmService;
+    private final ScraperServiceClient scraperServiceClient;
 
     @org.springframework.beans.factory.annotation.Value("${app.ranking.llm.enabled:true}")
     private boolean llmRankingEnabled;
@@ -86,9 +87,12 @@ public class ProductService {
             predicates.add(cb.equal(product.get("active"), filters.get("active")));
         }
 
-        // Sharia certified filter
+        // Sharia certified filter — treat NULL as true (all products are Sharia-compliant by default)
         if (filters.containsKey("sharia_certified")) {
-            predicates.add(cb.equal(product.get("shariaCertified"), filters.get("sharia_certified")));
+            predicates.add(cb.or(
+                    cb.equal(product.get("shariaCertified"), filters.get("sharia_certified")),
+                    cb.isNull(product.get("shariaCertified"))
+            ));
         }
 
         // User income filter
@@ -432,11 +436,40 @@ public class ProductService {
         productData.put("description", product.getDescription());
         productData.put("islamicStructure", product.getIslamicStructure());
         productData.put("keyBenefits", product.getKeyBenefits());
+        productData.put("rawPageContent", product.getRawPageContent());
 
         List<String> keywords = llmService.generateKeywordsFromMap(productData);
         log.info("Generated {} keywords: {}", keywords.size(), keywords);
 
         return keywords;
+    }
+
+    /**
+     * Generate summary for a product using LLM
+     */
+    public String generateSummary(Long id) {
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Product not found: " + id));
+        log.info("Generating summary for product: {}", product.getProductName());
+        Map<String, Object> productData = new HashMap<>();
+        productData.put("productName", product.getProductName());
+        productData.put("category", product.getCategory());
+        productData.put("subCategory", product.getSubCategory());
+        productData.put("islamicStructure", product.getIslamicStructure());
+        productData.put("description", product.getDescription());
+        productData.put("keyBenefits", product.getKeyBenefits());
+        productData.put("keywords", product.getKeywords());
+        productData.put("annualRate", product.getAnnualRate());
+        productData.put("annualFee", product.getAnnualFee());
+        productData.put("minIncome", product.getMinIncome());
+        productData.put("minCreditScore", product.getMinCreditScore());
+        productData.put("eligibilityCriteria", product.getEligibilityCriteria());
+        productData.put("sourceUrl", product.getSourceUrl());
+        productData.put("rawPageContent", product.getRawPageContent());
+        String summary = llmService.generateSummaryFromMap(productData);
+        log.info("Generated summary ({} chars) for product: {}",
+                summary != null ? summary.length() : 0, product.getProductName());
+        return summary;
     }
 
     /**
@@ -452,5 +485,52 @@ public class ProductService {
 
         log.info("Saved {} keywords for product: {}", keywords.size(), product.getProductName());
         return saved;
+    }
+
+    /**
+     * Refresh a product's raw page content by re-scraping its configured {@code sourceUrl}.
+     * <p>
+     * Workflow:
+     * <ol>
+     *   <li>Load the product — throws {@link RuntimeException} if not found.</li>
+     *   <li>Validate that a source URL is configured — throws {@link IllegalStateException} if not.</li>
+     *   <li>Delegate to {@link ScraperServiceClient} to fetch the current page text.</li>
+     *   <li>Persist {@code rawPageContent} and {@code scrapedAt} on the product.</li>
+     * </ol>
+     *
+     * @param id product ID
+     * @return map with {@code scrapedAt} and a confirmation {@code message}
+     * @throws RuntimeException      if product not found or scraper returns empty content
+     * @throws IllegalStateException if the product has no {@code sourceUrl} configured
+     */
+    @Transactional
+    public Map<String, Object> refreshProductContent(Long id) {
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Product not found: " + id));
+
+        if (product.getSourceUrl() == null || product.getSourceUrl().isBlank()) {
+            throw new IllegalStateException("No source URL configured for product: " + id);
+        }
+
+        log.info("Refreshing page content for product {} (sourceUrl={})",
+                product.getProductName(), product.getSourceUrl());
+
+        String rawText = scraperServiceClient.scrapePageContent(product.getSourceUrl());
+
+        if (rawText == null || rawText.isBlank()) {
+            throw new RuntimeException("Scraper returned empty content for: " + product.getSourceUrl());
+        }
+
+        product.setRawPageContent(rawText);
+        product.setScrapedAt(LocalDateTime.now());
+        productRepository.save(product);
+
+        log.info("Refreshed raw content for product {} ({} chars)",
+                product.getProductName(), rawText.length());
+
+        return Map.of(
+                "scrapedAt", product.getScrapedAt(),
+                "message", "Content refreshed successfully"
+        );
     }
 }

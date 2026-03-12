@@ -41,7 +41,7 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
      */
     @Query("SELECT p FROM Product p WHERE p.category IN :categories " +
            "AND p.active = true " +
-           "AND p.shariaCertified = true " +
+           "AND (p.shariaCertified = true OR p.shariaCertified IS NULL) " +
            "AND (p.minIncome IS NULL OR p.minIncome <= :userIncome) " +
            "AND (p.minCreditScore IS NULL OR p.minCreditScore <= :creditScore)")
     List<Product> findRecommendedProducts(
@@ -55,6 +55,6 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
      */
     @Query("SELECT p FROM Product p WHERE p.category IN :categories " +
            "AND p.active = true " +
-           "AND p.shariaCertified = true")
+           "AND (p.shariaCertified = true OR p.shariaCertified IS NULL)")
     List<Product> findByCategoriesWithBasicFilters(@Param("categories") List<String> categories);
 }

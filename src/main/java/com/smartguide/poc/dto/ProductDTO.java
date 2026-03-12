@@ -30,4 +30,6 @@ public class ProductDTO {
     private List<String> keyBenefits;
     private List<String> keywords;
     private LocalDateTime createdAt;
+    private LocalDateTime scrapedAt;
+    private String sourceUrl;
 }

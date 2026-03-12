@@ -8,6 +8,8 @@ import com.smartguide.poc.config.LLMConfig;
 import com.smartguide.poc.entity.Product;
 import com.smartguide.poc.entity.StagingProduct;
 import lombok.extern.slf4j.Slf4j;
+import org.jsoup.Jsoup;
+import org.jsoup.safety.Safelist;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -74,11 +76,17 @@ public class LLMService {
     @Value("${app.keywords.generation.system-prompt}")
     private String keywordSystemPrompt;
 
+    @Value("${app.summary.generation.system-prompt}")
+    private String summarySystemPrompt;
+
     @Value("${app.keywords.generation.max-keywords:10}")
     private int maxKeywords;
 
     @Value("${app.keywords.generation.timeout-seconds:30}")
     private int timeoutSeconds;
+
+    @Value("${app.summary.generation.timeout-seconds:120}")
+    private int summaryTimeoutSeconds;
 
     @Value("${app.ranking.llm.timeout-ms:15000}")
     private int rankingTimeoutMs;
@@ -87,6 +95,20 @@ public class LLMService {
         this.llmConfig = llmConfig;
         this.objectMapper = objectMapper;
         this.webClient = WebClient.builder().build();
+    }
+
+    /**
+     * Sanitize user-supplied text before it is embedded in an LLM prompt.
+     * Strips HTML tags and removes common prompt-injection markers.
+     */
+    private String sanitizeForPrompt(String input) {
+        String stripped = Jsoup.clean(input, Safelist.none());
+        if (stripped.contains("ignore previous") || stripped.contains("system:")
+                || stripped.contains("```")) {
+            log.warn("Potential prompt injection detected in user input, sanitizing");
+            stripped = stripped.replaceAll("(?i)(ignore previous|system:|```)", "[REMOVED]");
+        }
+        return stripped;
     }
 
     /**
@@ -116,10 +138,11 @@ public class LLMService {
                 llmConfig.getAzure().getDeploymentName(),
                 llmConfig.getAzure().getApiVersion());
 
+        String sanitizedInput = sanitizeForPrompt(userInput);
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("messages", Arrays.asList(
                 Map.of("role", "system", "content", SYSTEM_PROMPT),
-                Map.of("role", "user", "content", String.format("Extract intent from this %s text: %s", language, userInput))
+                Map.of("role", "user", "content", String.format("Extract intent from this %s text: %s", language, sanitizedInput))
         ));
         requestBody.put("temperature", 0.3);
         requestBody.put("max_tokens", 200);
@@ -138,10 +161,12 @@ public class LLMService {
 
             return parseAzureResponse(response);
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            log.error("Azure OpenAI JSON parsing error: {}", e.getMessage());
+            log.error("Azure OpenAI JSON parsing error: {}", e.getClass().getSimpleName());
+            log.debug("Azure OpenAI JSON parsing detail", e);
             throw new RuntimeException("Failed to parse Azure response", e);
         } catch (Exception e) {
-            log.error("Azure OpenAI error: {}", e.getMessage());
+            log.error("Azure OpenAI request failed: {}", e.getClass().getSimpleName());
+            log.debug("Azure OpenAI request error detail", e);
             throw new RuntimeException("Azure OpenAI request failed", e);
         }
     }
@@ -151,8 +176,9 @@ public class LLMService {
      */
     private Map<String, Object> extractIntentOllama(String userInput, String language) {
         String url = llmConfig.getOllama().getHost() + "/api/generate";
+        String sanitizedInput = sanitizeForPrompt(userInput);
         String prompt = String.format("%s\n\nExtract intent from this %s text: %s",
-                SYSTEM_PROMPT, language, userInput);
+                SYSTEM_PROMPT, language, sanitizedInput);
 
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("model", llmConfig.getOllama().getModel());
@@ -176,10 +202,12 @@ public class LLMService {
 
             return parseOllamaResponse(response);
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            log.error("Ollama JSON parsing error: {}", e.getMessage());
+            log.error("Ollama JSON parsing error: {}", e.getClass().getSimpleName());
+            log.debug("Ollama JSON parsing detail", e);
             throw new RuntimeException("Failed to parse Ollama response", e);
         } catch (Exception e) {
-            log.error("Ollama error: {}", e.getMessage());
+            log.error("Ollama request failed: {}", e.getClass().getSimpleName());
+            log.debug("Ollama request error detail", e);
             throw new RuntimeException("Ollama request failed", e);
         }
     }
@@ -596,6 +624,13 @@ public class LLMService {
         if (productData.get("keyBenefits") != null) {
             prompt.append("- Key Benefits: ").append(productData.get("keyBenefits")).append("\n");
         }
+        Object rawContent = productData.get("rawPageContent");
+        if (rawContent != null && !rawContent.toString().isBlank()) {
+            String excerpt = rawContent.toString().trim();
+            if (excerpt.length() > 2000) excerpt = excerpt.substring(0, 2000);
+            prompt.append("- Verbatim page content (primary source — extract keywords from this):\n")
+                  .append(excerpt).append("\n");
+        }
 
         return prompt.toString();
     }
@@ -651,6 +686,158 @@ public class LLMService {
     }
 
     /**
+     * Generate a summary for a product using LLM
+     */
+    public String generateSummaryFromMap(Map<String, Object> productData) {
+        try {
+            String userPrompt = buildSummaryPrompt(productData);
+            String summary;
+            if ("azure".equalsIgnoreCase(llmConfig.getProvider())) {
+                summary = generateSummaryAzure(userPrompt);
+            } else if ("ollama".equalsIgnoreCase(llmConfig.getProvider())) {
+                summary = generateSummaryOllama(userPrompt);
+            } else {
+                throw new IllegalArgumentException("Unknown LLM provider: " + llmConfig.getProvider());
+            }
+            if (summary != null && summary.length() > 1000) {
+                summary = summary.substring(0, 1000);
+            }
+            return summary;
+        } catch (Exception e) {
+            log.warn("Summary generation failed ({}), using fallback", e.getClass().getSimpleName());
+            log.debug("Summary generation error detail", e);
+            return getFallbackSummary(productData);
+        }
+    }
+
+    private String buildSummaryPrompt(Map<String, Object> productData) {
+        StringBuilder sb = new StringBuilder();
+
+        Object rawContent = productData.get("rawPageContent");
+        boolean hasRawContent = rawContent != null
+                && !rawContent.toString().isBlank();
+
+        if (hasRawContent) {
+            sb.append("=== PRIMARY SOURCE — VERBATIM PAGE CONTENT (treat as ground truth) ===\n");
+            sb.append("The following text was extracted verbatim from the official product page. ");
+            sb.append("Use it as your PRIMARY source of facts. Every claim in your output must be traceable to this text.\n\n");
+            sb.append(rawContent.toString().trim()).append("\n\n");
+            sb.append("=== END PRIMARY SOURCE ===\n\n");
+            sb.append("=== SUPPLEMENTARY STRUCTURED FIELDS (use to confirm or fill gaps in the above) ===\n");
+            sb.append("These fields were extracted from the page and may be incomplete. ");
+            sb.append("Use them only to supplement the primary source — do not use them to introduce facts not in the primary source.\n");
+        } else {
+            sb.append("Generate a semantic product profile using ONLY the following product data. ");
+            sb.append("Every fact in your output must come directly from this data — do not add, assume, or infer anything not listed below.\n\n");
+            sb.append("=== PRODUCT DATA (use only what is present below) ===\n");
+        }
+
+        appendIfPresent(sb, "Product Name", productData.get("productName"));
+        appendIfPresent(sb, "Category", productData.get("category"));
+        appendIfPresent(sb, "Sub-Category", productData.get("subCategory"));
+        appendIfPresent(sb, "Islamic Structure", productData.get("islamicStructure"));
+        appendIfPresent(sb, "Existing Description", productData.get("description"));
+        appendIfPresent(sb, "Key Benefits", productData.get("keyBenefits"));
+        appendIfPresent(sb, "Keywords", productData.get("keywords"));
+        appendIfPresent(sb, "Annual Profit Rate", productData.get("annualRate"));
+        appendIfPresent(sb, "Annual Fee", productData.get("annualFee"));
+        appendIfPresent(sb, "Minimum Income Required", productData.get("minIncome"));
+        appendIfPresent(sb, "Minimum Credit Score", productData.get("minCreditScore"));
+        appendIfPresent(sb, "Eligibility Criteria", productData.get("eligibilityCriteria"));
+        appendIfPresent(sb, "Source URL", productData.get("sourceUrl"));
+
+        if (hasRawContent) {
+            sb.append("=== END SUPPLEMENTARY FIELDS ===\n\n");
+        } else {
+            sb.append("=== END OF PRODUCT DATA ===\n\n");
+        }
+
+        sb.append("Write the semantic product profile now. ");
+        sb.append("If a section cannot be written from the data above, omit it — do not invent it.");
+        return sb.toString();
+    }
+
+    private void appendIfPresent(StringBuilder sb, String label, Object value) {
+        if (value == null) return;
+        if (value instanceof String && ((String) value).isBlank()) return;
+        sb.append(label).append(": ").append(value).append("\n");
+    }
+
+    private String generateSummaryAzure(String userPrompt) throws Exception {
+        String url = String.format("%s/openai/deployments/%s/chat/completions?api-version=%s",
+                llmConfig.getAzure().getEndpoint(),
+                llmConfig.getAzure().getDeploymentName(),
+                llmConfig.getAzure().getApiVersion());
+
+        Map<String, Object> requestBody = new HashMap<>();
+        requestBody.put("messages", Arrays.asList(
+                Map.of("role", "system", "content", summarySystemPrompt),
+                Map.of("role", "user", "content", userPrompt)
+        ));
+        requestBody.put("temperature", 0.3);
+        requestBody.put("max_tokens", 300);
+
+        String response = webClient.post()
+                .uri(url)
+                .header("api-key", llmConfig.getAzure().getApiKey())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(requestBody)
+                .retrieve()
+                .bodyToMono(String.class)
+                .timeout(Duration.ofSeconds(summaryTimeoutSeconds))
+                .block();
+
+        JsonNode root = objectMapper.readTree(response);
+        return root.path("choices").get(0).path("message").path("content").asText().trim();
+    }
+
+    private String generateSummaryOllama(String userPrompt) throws Exception {
+        String url = llmConfig.getOllama().getHost() + "/api/generate";
+        String fullPrompt = summarySystemPrompt + "\n\n" + userPrompt;
+
+        Map<String, Object> requestBody = new HashMap<>();
+        requestBody.put("model", llmConfig.getOllama().getModel());
+        requestBody.put("prompt", fullPrompt);
+        requestBody.put("stream", false);
+        requestBody.put("options", Map.of(
+                "temperature", 0.3,
+                "num_predict", 500
+        ));
+
+        String response = webClient.post()
+                .uri(url)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(requestBody)
+                .retrieve()
+                .bodyToMono(String.class)
+                .timeout(Duration.ofSeconds(summaryTimeoutSeconds))
+                .block();
+
+        JsonNode root = objectMapper.readTree(response);
+        return root.path("response").asText().trim();
+    }
+
+    private String getFallbackSummary(Map<String, Object> productData) {
+        String name = productData.get("productName") != null ? productData.get("productName").toString() : "This product";
+        String category = productData.get("category") != null ? productData.get("category").toString() : "";
+        String structure = productData.get("islamicStructure") != null ? productData.get("islamicStructure").toString() : "";
+        StringBuilder sb = new StringBuilder();
+        sb.append(name);
+        if (!category.isEmpty()) {
+            sb.append(" is a Sharia-compliant ").append(category.toLowerCase()).append(" product");
+        } else {
+            sb.append(" is a Sharia-compliant banking product");
+        }
+        if (!structure.isEmpty()) {
+            sb.append(" structured under ").append(structure);
+        }
+        sb.append(" offered by Smart Guide. ");
+        sb.append("It is designed to meet your financial needs in accordance with Islamic finance principles.");
+        log.info("Using fallback summary for product: {}", name);
+        return sb.toString();
+    }
+
+    /**
      * Rank products using LLM based on user query and intent
      */
     public List<Map<String, Object>> rankProductsWithLLM(
@@ -675,7 +862,8 @@ public class LLMService {
             return parseRankingResponse(response, products);
 
         } catch (Exception e) {
-            log.error("LLM ranking failed: {}", e.getMessage(), e);
+            log.error("LLM ranking failed: {}", e.getClass().getSimpleName());
+            log.debug("LLM ranking error detail", e);
             throw new RuntimeException("LLM ranking failed", e);
         }
     }
@@ -696,7 +884,7 @@ public class LLMService {
         prompt.append("4. Eligibility and practical suitability\n");
         prompt.append("5. Value proposition (fees, benefits, features)\n\n");
 
-        prompt.append("USER QUERY: ").append(userInput).append("\n");
+        prompt.append("USER QUERY: ").append(sanitizeForPrompt(userInput)).append("\n");
         prompt.append("DETECTED INTENT: ").append(intentData.get("intent"));
         prompt.append(" (confidence: ").append(String.format("%.0f%%", (Double) intentData.get("confidence") * 100)).append(")\n\n");
 

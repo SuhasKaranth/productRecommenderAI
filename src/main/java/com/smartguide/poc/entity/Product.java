@@ -90,4 +90,7 @@ public class Product {
 
     @Column(name = "data_quality_score", precision = 3, scale = 2)
     private BigDecimal dataQualityScore;
+
+    @Column(name = "raw_page_content", columnDefinition = "TEXT")
+    private String rawPageContent;
 }

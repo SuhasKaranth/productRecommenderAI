@@ -37,4 +37,5 @@ public class ExtractedProduct {
 
     private String sourceUrl;
     private String pageContent; // Original page text for reference
+    private String rawPageContent; // Verbatim page text used as primary LLM grounding source (up to 15000 chars)
 }

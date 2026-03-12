@@ -3,6 +3,8 @@ package com.smartguide.poc.controller;
 import com.smartguide.poc.dto.ProductDTO;
 import com.smartguide.poc.entity.Product;
 import com.smartguide.poc.repository.ProductRepository;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -203,6 +205,29 @@ public class ProductController {
     }
 
     /**
+     * Generate summary for a product
+     */
+    @PostMapping("/{id}/generate-summary")
+    public ResponseEntity<Map<String, Object>> generateSummary(@PathVariable Long id) {
+        log.info("Generating summary for product id: {}", id);
+        try {
+            String summary = productService.generateSummary(id);
+            Map<String, Object> response = new HashMap<>();
+            response.put("summary", summary);
+            response.put("message", "Summary generated successfully");
+            return ResponseEntity.ok(response);
+        } catch (RuntimeException e) {
+            log.error("Product not found when generating summary for id {}: {}", id, e.getMessage());
+            return ResponseEntity.notFound().build();
+        } catch (Exception e) {
+            log.error("Error generating summary for product {}: {}", id, e.getMessage());
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", "Failed to generate summary: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    /**
      * Save keywords for a product
      */
     @PostMapping("/{id}/keywords")
@@ -230,6 +255,57 @@ public class ProductController {
     }
 
     /**
+     * Refresh raw page content for a product by re-scraping its configured source URL.
+     * <p>
+     * Delegates to {@link com.smartguide.poc.service.ProductService#refreshProductContent(Long)}.
+     *
+     * @param id product ID
+     * @return 200 with {@code scrapedAt} and {@code message} on success;
+     *         404 if product not found;
+     *         400 if product has no source URL configured;
+     *         502 if scraper service is unreachable;
+     *         500 on other unexpected errors
+     */
+    @PostMapping("/{id}/refresh-content")
+    @Operation(
+            summary = "Refresh raw page content for a product",
+            description = "Re-scrapes the product's sourceUrl via the scraper service and "
+                    + "stores the result in rawPageContent + scrapedAt. Call this before "
+                    + "re-generating the AI summary to ensure it uses the latest data.")
+    @ApiResponse(responseCode = "200", description = "Content refreshed — scrapedAt timestamp returned")
+    @ApiResponse(responseCode = "400", description = "Product has no source URL configured")
+    @ApiResponse(responseCode = "404", description = "Product not found")
+    @ApiResponse(responseCode = "502", description = "Scraper service unreachable")
+    @ApiResponse(responseCode = "500", description = "Unexpected error during refresh")
+    public ResponseEntity<Map<String, Object>> refreshContent(@PathVariable Long id) {
+        log.info("Refresh content requested for product id: {}", id);
+        try {
+            Map<String, Object> result = productService.refreshProductContent(id);
+            return ResponseEntity.ok(result);
+        } catch (IllegalStateException e) {
+            // Product exists but has no sourceUrl configured
+            log.warn("Cannot refresh product {}: {}", id, e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (RuntimeException e) {
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            if (msg.toLowerCase().contains("not found")) {
+                log.warn("Product not found when refreshing content for id {}: {}", id, msg);
+                return ResponseEntity.notFound().build();
+            }
+            if (msg.toLowerCase().contains("unavailable") || msg.toLowerCase().contains("connection")) {
+                log.error("Scraper service unreachable while refreshing product {}: {}", id, msg);
+                return ResponseEntity.status(502).body(Map.of("error", msg));
+            }
+            log.error("Unexpected error refreshing content for product {}: {}", id, msg, e);
+            return ResponseEntity.internalServerError().body(Map.of("error", msg));
+        } catch (Exception e) {
+            log.error("Unexpected error refreshing content for product {}: {}", id, e.getMessage(), e);
+            return ResponseEntity.internalServerError().body(
+                    Map.of("error", "Unexpected error during content refresh: " + e.getMessage()));
+        }
+    }
+
+    /**
      * Convert Product entity to ProductDTO
      */
     private ProductDTO convertToDTO(Product product) {
@@ -247,6 +323,8 @@ public class ProductController {
                 .keyBenefits(product.getKeyBenefits())
                 .keywords(product.getKeywords())
                 .createdAt(product.getCreatedAt())
+                .scrapedAt(product.getScrapedAt())
+                .sourceUrl(product.getSourceUrl())
                 .build();
     }
 }

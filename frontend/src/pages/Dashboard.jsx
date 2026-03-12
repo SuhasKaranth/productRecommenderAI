@@ -130,7 +130,7 @@ const Dashboard = ({ onNavigate }) => {
               </Typography>
               <Typography variant="body2" color="textSecondary">
                 <Assessment sx={{ verticalAlign: 'middle', mr: 1 }} />
-                Total Products in Staging: {stats.pending + stats.approved + stats.rejected}
+                Total Scraped Products: {stats.pending + stats.approved + stats.rejected}
               </Typography>
             </CardContent>
           </Card>

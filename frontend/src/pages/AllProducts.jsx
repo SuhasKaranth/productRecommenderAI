@@ -27,6 +27,7 @@ import {
   CircularProgress,
   Alert,
   Checkbox,
+  Snackbar,
 } from '@mui/material';
 import {
   Edit as EditIcon,
@@ -34,9 +35,9 @@ import {
   CheckCircle,
   Cancel,
   Delete as DeleteIcon,
-  Psychology as PsychologyIcon,
 } from '@mui/icons-material';
 import { productApi } from '../services/api';
+import ProductEditDrawer from '../components/ProductEditDrawer';
 
 const AllProducts = () => {
   const [products, setProducts] = useState([]);
@@ -51,10 +52,8 @@ const AllProducts = () => {
   const [editingProduct, setEditingProduct] = useState(null);
   const [selectedProducts, setSelectedProducts] = useState([]);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [keywordDialogOpen, setKeywordDialogOpen] = useState(false);
-  const [currentProduct, setCurrentProduct] = useState(null);
-  const [generatedKeywords, setGeneratedKeywords] = useState([]);
-  const [generatingKeywords, setGeneratingKeywords] = useState(false);
+  const [drawerProductId, setDrawerProductId] = useState(null);
+  const [successSnackbarOpen, setSuccessSnackbarOpen] = useState(false);
 
   useEffect(() => {
     fetchProducts();
@@ -152,45 +151,15 @@ const AllProducts = () => {
     setDeleteConfirmOpen(false);
   };
 
-  const handleGenerateKeywords = async (product) => {
-    setCurrentProduct(product);
-    setKeywordDialogOpen(true);
-    setGeneratingKeywords(true);
-    setGeneratedKeywords([]);
-
-    try {
-      const response = await productApi.generateKeywords(product.id);
-      setGeneratedKeywords(response.data.keywords);
-    } catch (err) {
-      setError(err.response?.data?.message || err.message || 'Failed to generate keywords');
-    } finally {
-      setGeneratingKeywords(false);
-    }
+  const handleRowClick = (productId) => setDrawerProductId(productId);
+  const handleDrawerClose = () => setDrawerProductId(null);
+  const handleDrawerSaveSuccess = () => {
+    setDrawerProductId(null);
+    setSuccessSnackbarOpen(true);
+    fetchProducts();
   };
 
-  const handleSaveKeywords = async () => {
-    try {
-      await productApi.saveKeywords(currentProduct.id, generatedKeywords);
-      setKeywordDialogOpen(false);
-      setCurrentProduct(null);
-      setGeneratedKeywords([]);
-      fetchProducts();
-    } catch (err) {
-      setError(err.response?.data?.message || err.message || 'Failed to save keywords');
-    }
-  };
-
-  const handleCloseKeywordDialog = () => {
-    setKeywordDialogOpen(false);
-    setCurrentProduct(null);
-    setGeneratedKeywords([]);
-  };
-
-  const handleRemoveKeyword = (indexToRemove) => {
-    setGeneratedKeywords(generatedKeywords.filter((_, index) => index !== indexToRemove));
-  };
-
-  const categories = ['CASA', 'CREDIT_CARD', 'FINANCING', 'INVESTMENT', 'INSURANCE', 'CAR', 'HOME', 'BUSINESS'];
+  const categories =['CASA', 'CREDIT_CARD', 'FINANCING', 'INVESTMENT', 'INSURANCE', 'CAR', 'HOME', 'BUSINESS'];
 
   return (
     <Box>
@@ -345,11 +314,18 @@ const AllProducts = () => {
                 </TableHead>
                 <TableBody>
                   {products.map((product) => (
-                    <TableRow key={product.id} hover selected={selectedProducts.includes(product.id)}>
+                    <TableRow
+                      key={product.id}
+                      hover
+                      selected={selectedProducts.includes(product.id)}
+                      onClick={() => handleRowClick(product.id)}
+                      sx={{ cursor: 'pointer' }}
+                    >
                       <TableCell padding="checkbox">
                         <Checkbox
                           checked={selectedProducts.includes(product.id)}
-                          onChange={() => handleSelectProduct(product.id)}
+                          onChange={(e) => { e.stopPropagation(); handleSelectProduct(product.id); }}
+                          onClick={(e) => e.stopPropagation()}
                         />
                       </TableCell>
                       <TableCell>
@@ -377,21 +353,12 @@ const AllProducts = () => {
                       </TableCell>
                       <TableCell>
                         <Box display="flex" flexWrap="wrap" gap={0.5}>
-                          {product.keywords && product.keywords.length > 0 ? (
-                            product.keywords.map((keyword, idx) => (
-                              <Chip
-                                key={idx}
-                                label={keyword}
-                                size="small"
-                                variant="outlined"
-                                sx={{ fontSize: '0.7rem' }}
-                              />
-                            ))
-                          ) : (
-                            <Typography variant="caption" color="textSecondary">
-                              No keywords
-                            </Typography>
-                          )}
+                          {product.keywords && product.keywords.length > 0
+                            ? product.keywords.slice(0, 3).map((kw, i) => (
+                                <Chip key={i} label={kw} size="small" variant="outlined" sx={{ mr: 0.5 }} />
+                              ))
+                            : <Chip label="No keywords" size="small" color="warning" variant="outlined" />
+                          }
                         </Box>
                       </TableCell>
                       <TableCell>
@@ -440,15 +407,7 @@ const AllProducts = () => {
                       <TableCell align="center">
                         <IconButton
                           size="small"
-                          onClick={() => handleGenerateKeywords(product)}
-                          color="secondary"
-                          title="Generate Keywords"
-                        >
-                          <PsychologyIcon fontSize="small" />
-                        </IconButton>
-                        <IconButton
-                          size="small"
-                          onClick={() => handleEdit(product)}
+                          onClick={(e) => { e.stopPropagation(); handleEdit(product); }}
                           color="primary"
                           title="Edit Product"
                         >
@@ -598,70 +557,18 @@ const AllProducts = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Keyword Generation Dialog */}
-      <Dialog
-        open={keywordDialogOpen}
-        onClose={handleCloseKeywordDialog}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>
-          <Box display="flex" alignItems="center" gap={1}>
-            <PsychologyIcon />
-            Generate Keywords
-          </Box>
-        </DialogTitle>
-        <DialogContent>
-          {currentProduct && (
-            <Box sx={{ mt: 2 }}>
-              <Typography variant="subtitle2" gutterBottom>
-                Product: {currentProduct.productName}
-              </Typography>
-
-              {generatingKeywords ? (
-                <Box display="flex" flexDirection="column" alignItems="center" py={4}>
-                  <CircularProgress />
-                  <Typography variant="body2" color="textSecondary" sx={{ mt: 2 }}>
-                    Generating keywords...
-                  </Typography>
-                </Box>
-              ) : generatedKeywords.length > 0 ? (
-                <Box sx={{ mt: 2 }}>
-                  <Typography variant="body2" gutterBottom>
-                    Generated Keywords (click X to remove):
-                  </Typography>
-                  <Box display="flex" flexWrap="wrap" gap={1} sx={{ mt: 1 }}>
-                    {generatedKeywords.map((keyword, idx) => (
-                      <Chip
-                        key={idx}
-                        label={keyword}
-                        variant="outlined"
-                        size="small"
-                        onDelete={() => handleRemoveKeyword(idx)}
-                      />
-                    ))}
-                  </Box>
-                </Box>
-              ) : (
-                <Alert severity="info" sx={{ mt: 2 }}>
-                  No keywords generated yet.
-                </Alert>
-              )}
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseKeywordDialog}>Cancel</Button>
-          <Button
-            onClick={handleSaveKeywords}
-            variant="contained"
-            color="primary"
-            disabled={generatingKeywords || generatedKeywords.length === 0}
-          >
-            Save Keywords
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ProductEditDrawer
+        productId={drawerProductId}
+        onClose={handleDrawerClose}
+        onSaveSuccess={handleDrawerSaveSuccess}
+      />
+      <Snackbar
+        open={successSnackbarOpen}
+        autoHideDuration={4000}
+        onClose={() => setSuccessSnackbarOpen(false)}
+        message="Product updated"
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      />
     </Box>
   );
 };

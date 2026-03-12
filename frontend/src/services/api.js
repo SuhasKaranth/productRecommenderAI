@@ -1,11 +1,13 @@
 import axios from 'axios';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8080';
+const API_KEY = process.env.REACT_APP_API_KEY || '';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
+    ...(API_KEY && { 'X-API-Key': API_KEY }),
   },
 });
 
@@ -90,6 +92,7 @@ const recommendationApiInstance = axios.create({
   baseURL: 'http://localhost:8080',
   headers: {
     'Content-Type': 'application/json',
+    ...(API_KEY && { 'X-API-Key': API_KEY }),
   },
 });
 
@@ -135,6 +138,14 @@ export const productApi = {
   // Save keywords for product
   saveKeywords: (id, keywords) =>
     api.post(`/api/products/${id}/keywords`, { keywords }),
+
+  // Generate summary for product
+  generateSummary: (id) =>
+    api.post(`/api/products/${id}/generate-summary`),
+
+  // Refresh raw page content by re-scraping the product's source URL
+  refreshContent: (id) =>
+    api.post(`/api/products/${id}/refresh-content`),
 };
 
 export default api;

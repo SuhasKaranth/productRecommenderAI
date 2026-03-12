@@ -28,6 +28,9 @@ public class StagingProductService {
     @Value("${app.main-service.url}")
     private String mainServiceUrl;
 
+    @Value("${app.main-service.api-key}")
+    private String mainServiceApiKey;
+
     /**
      * Save list of extracted products to staging table
      */
@@ -57,6 +60,7 @@ public class StagingProductService {
 
             webClient.post()
                 .uri(mainServiceUrl + "/api/admin/staging")
+                .header("X-API-Key", mainServiceApiKey)
                 .bodyValue(stagingData)
                 .retrieve()
                 .bodyToMono(String.class)
@@ -113,6 +117,9 @@ public class StagingProductService {
             Map<String, Object> eligibilityMap = new HashMap<>();
             eligibilityMap.put("criteria", product.getEligibilityCriteria());
             data.put("eligibilityCriteria", eligibilityMap);
+        }
+        if (product.getRawPageContent() != null && !product.getRawPageContent().isBlank()) {
+            data.put("rawPageContent", product.getRawPageContent());
         }
 
         // AI metadata

@@ -27,9 +27,6 @@ import {
   Edit,
   Delete,
   Refresh,
-  Psychology,
-  Add,
-  Close,
 } from '@mui/icons-material';
 import { stagingApi } from '../services/api';
 
@@ -99,81 +96,6 @@ const ProductEditDialog = ({ open, product, onClose, onSave }) => {
   );
 };
 
-const KeywordReviewDialog = ({ open, product, keywords, onClose, onAccept, onReject }) => {
-  const [editableKeywords, setEditableKeywords] = useState([]);
-  const [newKeyword, setNewKeyword] = useState('');
-
-  useEffect(() => {
-    if (keywords) setEditableKeywords([...keywords]);
-  }, [keywords]);
-
-  const handleRemoveKeyword = (index) => {
-    setEditableKeywords(editableKeywords.filter((_, i) => i !== index));
-  };
-
-  const handleAddKeyword = () => {
-    if (newKeyword.trim() && !editableKeywords.includes(newKeyword.trim().toLowerCase())) {
-      setEditableKeywords([...editableKeywords, newKeyword.trim().toLowerCase()]);
-      setNewKeyword('');
-    }
-  };
-
-  const handleAccept = () => {
-    onAccept(editableKeywords);
-  };
-
-  return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>
-        Review Generated Keywords
-        <Typography variant="body2" color="textSecondary">
-          {product?.productName}
-        </Typography>
-      </DialogTitle>
-      <DialogContent>
-        <Box sx={{ mt: 2 }}>
-          <Typography variant="subtitle2" gutterBottom>
-            Generated Keywords (Review & Edit):
-          </Typography>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
-            {editableKeywords.map((keyword, index) => (
-              <Chip
-                key={index}
-                label={keyword}
-                onDelete={() => handleRemoveKeyword(index)}
-                color="primary"
-                variant="outlined"
-              />
-            ))}
-          </Box>
-
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <TextField
-              size="small"
-              label="Add keyword"
-              value={newKeyword}
-              onChange={(e) => setNewKeyword(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleAddKeyword()}
-              fullWidth
-            />
-            <IconButton onClick={handleAddKeyword} color="primary">
-              <Add />
-            </IconButton>
-          </Box>
-        </Box>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onReject} startIcon={<Close />}>
-          Reject
-        </Button>
-        <Button onClick={handleAccept} variant="contained" startIcon={<CheckCircle />}>
-          Accept & Save
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
-};
-
 const StagingReview = () => {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -181,12 +103,6 @@ const StagingReview = () => {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [message, setMessage] = useState(null);
-
-  // Keyword generation state
-  const [keywordDialogOpen, setKeywordDialogOpen] = useState(false);
-  const [generatingKeywords, setGeneratingKeywords] = useState({});
-  const [generatedKeywords, setGeneratedKeywords] = useState(null);
-  const [keywordProduct, setKeywordProduct] = useState(null);
 
   useEffect(() => {
     loadProducts();
@@ -208,7 +124,7 @@ const StagingReview = () => {
   const handleApprove = async (productId) => {
     try {
       await stagingApi.approveProduct(productId, 'admin', 'Approved via UI');
-      setMessage({ type: 'success', text: 'Product approved successfully' });
+      setMessage({ type: 'success', text: 'Product approved. Open it in All Products to generate summary and keywords.' });
       loadProducts();
     } catch (error) {
       setMessage({ type: 'error', text: 'Failed to approve product' });
@@ -222,7 +138,7 @@ const StagingReview = () => {
       await stagingApi.bulkApprove(selectedProducts, 'admin', 'Bulk approved via UI');
       setMessage({
         type: 'success',
-        text: `${selectedProducts.length} products approved successfully`,
+        text: `${selectedProducts.length} product(s) approved. Open them in All Products to generate summary and keywords.`,
       });
       loadProducts();
     } catch (error) {
@@ -289,38 +205,6 @@ const StagingReview = () => {
   const handleEdit = (product) => {
     setEditingProduct(product);
     setEditDialogOpen(true);
-  };
-
-  const handleGenerateKeywords = async (product) => {
-    setGeneratingKeywords({ ...generatingKeywords, [product.id]: true });
-
-    try {
-      const response = await stagingApi.generateKeywords(product.id);
-      setGeneratedKeywords(response.data.keywords);
-      setKeywordProduct(product);
-      setKeywordDialogOpen(true);
-      setMessage({ type: 'success', text: `Generated ${response.data.keywords.length} keywords` });
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Failed to generate keywords' });
-    } finally {
-      setGeneratingKeywords({ ...generatingKeywords, [product.id]: false });
-    }
-  };
-
-  const handleAcceptKeywords = async (keywords) => {
-    try {
-      await stagingApi.saveKeywords(keywordProduct.id, keywords);
-      setMessage({ type: 'success', text: 'Keywords saved successfully' });
-      setKeywordDialogOpen(false);
-      loadProducts();
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Failed to save keywords' });
-    }
-  };
-
-  const handleRejectKeywords = () => {
-    setKeywordDialogOpen(false);
-    setMessage({ type: 'info', text: 'Keywords discarded' });
   };
 
   const handleSelectAll = (event) => {
@@ -417,7 +301,6 @@ const StagingReview = () => {
                   </TableCell>
                   <TableCell>Product Name</TableCell>
                   <TableCell>Category</TableCell>
-                  <TableCell>Keywords</TableCell>
                   <TableCell>AI Suggestion</TableCell>
                   <TableCell>Actions</TableCell>
                 </TableRow>
@@ -434,42 +317,6 @@ const StagingReview = () => {
                     <TableCell>{product.productName}</TableCell>
                     <TableCell>
                       <Chip label={product.category || 'N/A'} size="small" />
-                    </TableCell>
-                    <TableCell>
-                      {product.keywords && product.keywords.length > 0 ? (
-                        <Box
-                          sx={{
-                            display: 'flex',
-                            flexWrap: 'wrap',
-                            gap: 0.5,
-                            maxWidth: 200,
-                            cursor: 'pointer',
-                            '&:hover': { opacity: 0.8 }
-                          }}
-                          onClick={() => {
-                            setGeneratedKeywords(product.keywords);
-                            setKeywordProduct(product);
-                            setKeywordDialogOpen(true);
-                          }}
-                          title="Click to view and edit keywords"
-                        >
-                          {product.keywords.slice(0, 3).map((keyword, idx) => (
-                            <Chip key={idx} label={keyword} size="small" />
-                          ))}
-                          {product.keywords.length > 3 && (
-                            <Chip label={`+${product.keywords.length - 3}`} size="small" variant="outlined" />
-                          )}
-                        </Box>
-                      ) : (
-                        <Button
-                          size="small"
-                          startIcon={generatingKeywords[product.id] ? <CircularProgress size={16} /> : <Psychology />}
-                          onClick={() => handleGenerateKeywords(product)}
-                          disabled={generatingKeywords[product.id]}
-                        >
-                          Generate
-                        </Button>
-                      )}
                     </TableCell>
                     <TableCell>
                       {product.aiSuggestedCategory ? (
@@ -539,14 +386,6 @@ const StagingReview = () => {
         }}
       />
 
-      <KeywordReviewDialog
-        open={keywordDialogOpen}
-        product={keywordProduct}
-        keywords={generatedKeywords}
-        onClose={() => setKeywordDialogOpen(false)}
-        onAccept={handleAcceptKeywords}
-        onReject={handleRejectKeywords}
-      />
     </Box>
   );
 };

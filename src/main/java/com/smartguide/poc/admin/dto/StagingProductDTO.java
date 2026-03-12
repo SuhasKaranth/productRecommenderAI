@@ -53,6 +53,9 @@ public class StagingProductDTO {
     // Keywords
     private List<String> keywords;
 
+    // Raw page content for LLM grounding
+    private String rawPageContent;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -86,6 +89,7 @@ public class StagingProductDTO {
                 .aiConfidence(entity.getAiConfidence())
                 .aiCategorizationJson(entity.getAiCategorizationJson())
                 .keywords(entity.getKeywords())
+                .rawPageContent(entity.getRawPageContent())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
@@ -119,6 +123,7 @@ public class StagingProductDTO {
         entity.setAiConfidence(dto.getAiConfidence());
         entity.setAiCategorizationJson(dto.getAiCategorizationJson());
         entity.setKeywords(dto.getKeywords());
+        entity.setRawPageContent(dto.getRawPageContent());
         return entity;
     }
 }
