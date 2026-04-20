@@ -93,4 +93,10 @@ public class Product {
 
     @Column(name = "raw_page_content", columnDefinition = "TEXT")
     private String rawPageContent;
+
+    @Column(name = "listing_page_raw_content", columnDefinition = "TEXT")
+    private String listingPageRawContent;
+
+    @Column(name = "raw_content_source", length = 20)
+    private String rawContentSource;
 }

@@ -2,6 +2,9 @@ spring:
   application:
     name: product-scraper-service
 
+  config:
+    import: optional:file:.env[.properties]
+
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/smart_guide_poc}
     username: ${SPRING_DATASOURCE_USERNAME:postgres}
@@ -49,3 +52,39 @@ logging:
     com.microsoft.playwright: INFO
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+
+# Configurable bank-source CSS selectors for structured product card extraction.
+# When a scraped URL starts with a configured 'url' prefix, Playwright queries the DOM
+# directly using the declared selectors — bypassing the LLM discovery step entirely.
+# For URLs with no matching entry the generic LLM-based flow runs unchanged.
+scraper:
+  bank-sources:
+    - bank: DIB
+      url: https://dib.ae/personal/cards
+      card-container-selector: "div.card-list-item.show[data-categories]"
+      name-selector: ".card-title-info a"
+      url-selector: ".card-title-info a"
+      description-selector: ".card-desc-info"
+      benefits-selector: ".card-feature-info li"
+      skip-if-label-contains: "COVERED CARDS BENEFITS"
+
+  # AI enrichment configuration
+  # Controls how CSS-extracted product cards are enriched with category, confidence,
+  # and Sharia compliance flags before being saved to staging.
+  # Note: keyword generation is NOT done here — use POST /api/admin/staging/{id}/generate-keywords
+  enrichment:
+    # BATCH = N cards per LLM call; SEQUENTIAL = one card per LLM call
+    mode: ${SCRAPER_ENRICHMENT_MODE:BATCH}
+
+    # Number of products per LLM call in BATCH mode. Ignored in SEQUENTIAL mode.
+    # Valid range: 1+. Invalid values default to 7.
+    batch-size: ${SCRAPER_ENRICHMENT_BATCH_SIZE:7}
+
+    # Timeout in seconds for a single LLM API call (round-trip including inference time).
+    llm-timeout-seconds: ${SCRAPER_ENRICHMENT_LLM_TIMEOUT_SECONDS:120}
+
+    # Whether to retry a failed LLM call once before marking the batch as failed.
+    retry-on-failure: ${SCRAPER_ENRICHMENT_RETRY_ON_FAILURE:true}
+
+    # Maximum number of retry attempts per failed LLM call (only when retry-on-failure=true).
+    max-retries: ${SCRAPER_ENRICHMENT_MAX_RETRIES:1}

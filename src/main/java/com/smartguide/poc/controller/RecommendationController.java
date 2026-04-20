@@ -1,6 +1,7 @@
 package com.smartguide.poc.controller;
 
 import com.smartguide.poc.dto.*;
+import com.smartguide.poc.dto.RankingResult;
 import com.smartguide.poc.entity.Product;
 import com.smartguide.poc.service.LLMService;
 import com.smartguide.poc.service.ProductService;
@@ -77,7 +78,7 @@ public class RecommendationController {
             );
 
             // Step 4: Get and rank products (pass user input for keyword matching)
-            List<Map<String, Object>> rankedProducts = productService.getRecommendations(
+            RankingResult rankingResult = productService.getRecommendations(
                     filters,
                     intentData,
                     categories,
@@ -86,8 +87,8 @@ public class RecommendationController {
 
             // Step 5: Build response
             List<ProductRecommendation> recommendations = new ArrayList<>();
-            for (int i = 0; i < rankedProducts.size(); i++) {
-                Map<String, Object> item = rankedProducts.get(i);
+            for (int i = 0; i < rankingResult.rankedProducts().size(); i++) {
+                Map<String, Object> item = rankingResult.rankedProducts().get(i);
                 Product product = (Product) item.get("product");
 
                 ProductRecommendation recommendation = ProductRecommendation.builder()
@@ -133,6 +134,7 @@ public class RecommendationController {
                     .recommendations(recommendations)
                     .processingTimeMs(processingTimeMs)
                     .message(message)
+                    .summary(rankingResult.chatSummary())
                     .build();
 
             return ResponseEntity.ok(response);

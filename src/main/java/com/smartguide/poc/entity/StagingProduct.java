@@ -92,6 +92,12 @@ public class StagingProduct {
     @Column(name = "raw_page_content", columnDefinition = "TEXT")
     private String rawPageContent;
 
+    @Column(name = "listing_page_raw_content", columnDefinition = "TEXT")
+    private String listingPageRawContent;
+
+    @Column(name = "raw_content_source", length = 20)
+    private String rawContentSource;
+
     // Staging/approval metadata
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "scrape_log_id")

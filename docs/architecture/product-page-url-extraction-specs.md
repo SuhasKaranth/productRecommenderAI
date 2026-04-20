@@ -35,10 +35,22 @@ This two-phase feature corrects both problems without breaking any existing API 
 
 ### Goal
 
-While the Playwright browser is still open after the JS wait, extract all rendered anchor tags from the
-DOM. Pass the resulting link list to `AIProductExtractor` so the LLM can match each product name to its
-individual detail page URL. Store that per-product URL as `sourceUrl` in staging. Store the listing page
-raw content separately in a new `listing_page_raw_content` column so it is not lost.
+While the Playwright browser is still open after the JS wait, extract all rendered anchor tags **with
+their anchor text** from the DOM. Match each LLM-extracted product name to its detail page URL using
+**pure Java string matching** against the anchor text — no LLM involvement in URL resolution. Store the
+per-product detail URL as `sourceUrl` in staging. Store the listing page raw content separately in a
+new `listing_page_raw_content` column so it is not lost.
+
+### Approach — Why No LLM for URL Matching
+
+On a bank listing page, each product card links directly to its detail page via an anchor whose visible
+text **is** the product name (e.g. `<a href="/personal/cards/dib-cashback-card">DIB Cashback Card</a>`).
+The LLM already extracts `product_name` from that same visible text. A normalised `contains` string
+match between the extracted product name and the anchor text is therefore deterministic and accurate —
+no guessing, no extra tokens, no hallucination risk.
+
+The LLM's role remains extraction only (product name, description, rates, eligibility, etc.). It plays
+no part in URL resolution.
 
 ### Data Flow
 
@@ -46,13 +58,15 @@ raw content separately in a new `listing_page_raw_content` column so it is not l
 EnhancedScraperService.scrapeAndAnalyze(listingUrl)
   -> BasicScraperService.scrapeUrl(listingUrl)
        [Playwright: navigate, wait 3 s, innerText extraction UNCHANGED]
-       [NEW: second page.evaluate() -> List<{text, href}> anchor pairs]
-       -> ScrapeResponse { textContent, productLinks: List<String> }  [NEW field]
-  -> AIProductExtractor.extractProducts(textContent, listingUrl, productLinks)  [NEW param]
-       [buildExtractionPrompt() receives filtered link list appended as a LINKS section]
-       [JSON schema adds "product_url" field]
-       [mapToExtractedProduct() uses raw["product_url"] for sourceUrl; falls back to listingUrl]
-  -> stagingProductService.saveExtractedProducts(products, listingUrl)
+       [NEW: second page.evaluate() -> List<{text, href}> anchor pairs, both fields kept]
+       -> ScrapeResponse { textContent, anchorPairs: List<AnchorPair{text, href}> }  [NEW field]
+  -> AIProductExtractor.extractProducts(textContent, listingUrl)  [UNCHANGED signature]
+       [LLM extracts product names and all other fields as before — no URL matching]
+  -> EnhancedScraperService.matchProductUrls(products, anchorPairs, listingUrl)  [NEW]
+       [Pure Java: for each product, normalize product name and anchor texts,
+        find best contains-match, set product.sourceUrl = matched href]
+       [Falls back to listingUrl if no match found]
+  -> stagingProductService.saveExtractedProducts(products, listingUrl, textContent)  [NEW param]
        [buildStagingRequest() sends product.sourceUrl (detail URL) NOT the listingUrl arg]
        [NEW: sends listingPageRawContent = textContent from ScrapeResponse]
 ```
@@ -61,9 +75,9 @@ EnhancedScraperService.scrapeAndAnalyze(listingUrl)
 
 | Location | Field | Type | Purpose |
 |---|---|---|---|
-| `ScrapeResponse` | `productLinks` | `List<String>` | Rendered absolute anchor hrefs from DOM, filtered |
+| `ScrapeResponse` | `anchorPairs` | `List<AnchorPair>` | Rendered `{text, href}` pairs from DOM, filtered to same-domain non-nav links |
+| `AnchorPair` (new DTO) | `text`, `href` | `String` | Anchor visible text and absolute URL |
 | `ExtractedProduct` | (none new) | — | `sourceUrl` now holds detail URL; `pageContent` holds listing text as before |
-| LLM JSON schema | `product_url` | string | Detail page URL matched by LLM per product |
 | `staging_products` | `listing_page_raw_content` | TEXT | Verbatim listing page text (V12 migration) |
 | `products` | `listing_page_raw_content` | TEXT | Copied from staging on approval (V12 migration) |
 | `StagingProduct` entity | `listingPageRawContent` | String | JPA mapping for new column |
@@ -74,11 +88,13 @@ EnhancedScraperService.scrapeAndAnalyze(listingUrl)
 
 | File | Service | Change |
 |---|---|---|
-| `BasicScraperService.java` | Scraper | Add second `page.evaluate()` call while browser is open; collect anchor `{text, href}` pairs; filter to same-domain non-nav hrefs; resolve relative URLs to absolute; populate `ScrapeResponse.productLinks` |
-| `ScrapeResponse.java` | Scraper | Add `List<String> productLinks` field (Lombok `@Builder` — backward-compatible) |
-| `AIProductExtractor.java` | Scraper | (1) Add overload `extractProducts(pageContent, sourceUrl, productLinks)` that appends a `LINKS` section to the prompt. (2) Add `"product_url"` to the JSON output schema in `buildExtractionPrompt`. (3) In `mapToExtractedProduct`, read `raw["product_url"]` and use it as `sourceUrl` when non-null and non-blank; fall back to the `sourceUrl` parameter (listing URL) when absent. Existing `extractProducts(pageContent, sourceUrl)` delegates to the new overload with an empty list to preserve backward compatibility. |
-| `EnhancedScraperService.java` | Scraper | Pass `scrapeResult.getProductLinks()` to `aiProductExtractor.extractProducts()`. Pass `scrapeResult.getTextContent()` as `listingPageRawContent` to `stagingProductService.saveExtractedProducts()`. |
-| `StagingProductService.java` (scraper) | Scraper | Add `listingPageRawContent` parameter to `saveExtractedProducts` and `buildStagingRequest`; include it in the POST body to the main service staging API. |
+| `BasicScraperService.java` | Scraper | Add second `page.evaluate()` call while browser is open; collect `{text, href}` anchor pairs; filter to same-domain non-nav hrefs; resolve relative URLs to absolute; populate `ScrapeResponse.anchorPairs` |
+| `AnchorPair.java` (new) | Scraper | Simple DTO/record with `String text` and `String href` |
+| `ScrapeResponse.java` | Scraper | Add `List<AnchorPair> anchorPairs` field (Lombok `@Builder` — backward-compatible) |
+| `AIProductExtractor.java` | Scraper | **No change** — LLM extraction prompt and JSON schema unchanged; no `product_url` field added |
+| `EnhancedScraperService.java` | Scraper | (1) Pass `scrapeResult.getAnchorPairs()` to new `matchProductUrls()` method after LLM extraction. (2) Pass `scrapeResult.getTextContent()` as `listingPageRawContent` to `stagingProductService.saveExtractedProducts()`. |
+| `EnhancedScraperService.java` (new method) | Scraper | `matchProductUrls(List<ExtractedProduct>, List<AnchorPair>, String listingUrl)` — normalise product name and anchor text (lowercase, strip punctuation), find first anchor where either string contains the other; set `product.setSourceUrl(matched href)`; fall back to `listingUrl` |
+| `StagingProductService.java` (scraper) | Scraper | Add `listingPageRawContent` parameter to `saveExtractedProducts` and `buildStagingRequest`; include it in the POST body to the main service staging API. Use `product.getSourceUrl()` (detail URL) instead of the `listingUrl` arg for the `sourceUrl` field. |
 | `StagingProduct.java` | Main app | Add `@Column(name = "listing_page_raw_content", columnDefinition = "TEXT") String listingPageRawContent` |
 | `Product.java` | Main app | Add `@Column(name = "listing_page_raw_content", columnDefinition = "TEXT") String listingPageRawContent` |
 | `StagingProductDTO.java` | Main app | Add `String listingPageRawContent`; update `fromEntity` and `toEntity` |
@@ -88,7 +104,8 @@ EnhancedScraperService.scrapeAndAnalyze(listingUrl)
 ### DOM Link Extraction Expression
 
 The following JavaScript expression is passed to `page.evaluate()` while the browser is open. It
-returns a JSON array string that the Java side parses into `List<String>`:
+returns a JSON array string that the Java side parses into `List<AnchorPair>`. **Both `text` and `href`
+are kept** — the text is used for Java-side name matching:
 
 ```javascript
 () => JSON.stringify(
@@ -96,41 +113,61 @@ returns a JSON array string that the Java side parses into `List<String>`:
     .map(a => ({ text: a.innerText.trim(), href: a.href }))
     .filter(a => a.href.startsWith(window.location.origin))
     .filter(a => !/\/(login|contact|about|careers|sitemap|social|facebook|twitter|instagram|linkedin|youtube)/i.test(a.href))
-    .map(a => a.href)
+    .filter(a => a.text.length > 0)
 )
 ```
 
-The Java side: parse the JSON string into `List<String>`, deduplicate, and cap at 100 entries to avoid
-oversized prompts. Pass the deduplicated list into `buildExtractionPrompt`.
+The Java side: parse the JSON string into `List<AnchorPair>`, deduplicate by `href`, cap at 200 entries.
 
-### Prompt Addition (Links Section)
+### Java URL Matching Logic
 
-Append the following block inside `buildExtractionPrompt` when `productLinks` is non-empty, placed
-after the `WEBPAGE CONTENT` block and before `INSTRUCTIONS`:
+```java
+// In EnhancedScraperService.matchProductUrls()
+private void matchProductUrls(List<ExtractedProduct> products,
+                               List<AnchorPair> anchorPairs,
+                               String listingUrl) {
+    for (ExtractedProduct product : products) {
+        String normalizedName = normalize(product.getProductName());
+        String matchedUrl = anchorPairs.stream()
+            .filter(a -> {
+                String normalizedText = normalize(a.getText());
+                return normalizedText.contains(normalizedName)
+                    || normalizedName.contains(normalizedText);
+            })
+            .map(AnchorPair::getHref)
+            .findFirst()
+            .orElse(listingUrl);  // fallback: listing URL
+        product.setSourceUrl(matchedUrl);
+        if (matchedUrl.equals(listingUrl)) {
+            log.warn("No detail URL matched for product '{}' — using listing URL as fallback",
+                product.getProductName());
+        } else {
+            log.info("Matched product '{}' -> {}", product.getProductName(), matchedUrl);
+        }
+    }
+}
 
+// Normalise: lowercase, remove punctuation, collapse whitespace
+private String normalize(String input) {
+    return input == null ? "" : input.toLowerCase()
+        .replaceAll("[^a-z0-9 ]", " ")
+        .replaceAll("\\s+", " ")
+        .trim();
+}
 ```
-AVAILABLE PRODUCT LINKS (rendered from page DOM — use these to assign product_url):
-<one URL per line, up to 100 entries>
-
-For each product, find the link whose URL path or anchor text most closely matches the product name,
-and assign it as "product_url". If no suitable link exists, use null.
-```
-
-Also add `"product_url": "full absolute URL or null"` to the JSON output schema between `category`
-and `sub_category`.
 
 ### Constraints
 
 - The existing `discoverProductUrls()` method in `AIProductExtractor` must not be removed. It remains
-  available for future use. The approach above does not call it; it integrates link hints directly into
-  the existing full-extraction prompt instead.
-- If `page.evaluate()` for link extraction throws (e.g. browser crashed), catch the exception, log a
-  warning, and proceed with an empty `productLinks` list. The main scrape must not fail.
-- The listing URL passed as the `sourceUrl` argument to `saveExtractedProducts` is used only as a
-  fallback when a product has no `product_url` from the LLM. It must still be stored as
-  `listing_page_raw_content` to preserve provenance.
+  available for future use but is not called by this feature.
+- If `page.evaluate()` for anchor extraction throws (e.g. browser crash), catch the exception, log a
+  warning, and proceed with an empty `anchorPairs` list. All products will fall back to the listing URL.
+  The main scrape must not fail.
+- The listing URL fallback is still stored as `listing_page_raw_content` to preserve provenance.
 - No change to the `POST /api/admin/staging` request schema is needed; `listingPageRawContent` is an
   additive field.
+- `AIProductExtractor.extractProducts()` signature and LLM prompt are **unchanged** — this feature
+  adds zero LLM tokens and introduces no new hallucination surface.
 
 ---
 
@@ -263,38 +300,45 @@ SCRAPE TRIGGER (admin submits listing URL)
         v
 BasicScraperService.scrapeUrl(listingUrl)
   [Playwright: navigate -> waitForTimeout(3000)]
-  [evaluate #1: document.body.innerText  -> textContent]
-  [evaluate #2: anchor extraction JS     -> productLinks List<String>]
+  [evaluate #1: document.body.innerText        -> textContent]
+  [evaluate #2: anchor extraction JS           -> List<AnchorPair{text,href}>]
         |
         v
-ScrapeResponse { url, textContent, productLinks }
+ScrapeResponse { url, textContent, anchorPairs }
         |
         v
 AIProductExtractor.isProductPage(textContent)  [UNCHANGED]
         |
         v
-AIProductExtractor.extractProducts(textContent, listingUrl, productLinks)
-  [buildExtractionPrompt: appends LINKS section with productLinks]
-  [LLM JSON schema includes "product_url"]
-  [mapToExtractedProduct: sourceUrl = raw["product_url"] ?? listingUrl]
+AIProductExtractor.extractProducts(textContent, listingUrl)  [UNCHANGED]
+  [LLM extracts product names, descriptions, rates, eligibility — no URL involvement]
         |
         v
-List<ExtractedProduct> { sourceUrl=detailUrl, rawPageContent=listing excerpt }
+List<ExtractedProduct> { sourceUrl=listingUrl (temporary), ... }
         |
         v
-scraper StagingProductService.saveExtractedProducts(products, listingUrl)
+EnhancedScraperService.matchProductUrls(products, anchorPairs, listingUrl)
+  [Pure Java: normalize product name + anchor text -> contains match]
+  [Sets product.sourceUrl = matched detail URL per product]
+  [Falls back to listingUrl and logs warning if no anchor text match found]
+        |
+        v
+List<ExtractedProduct> { sourceUrl=detailUrl (per product), rawPageContent=listing excerpt }
+        |
+        v
+scraper StagingProductService.saveExtractedProducts(products, listingUrl, textContent)
   [buildStagingRequest: sourceUrl=product.sourceUrl (detail URL)]
-  [                     listingPageRawContent=scrapeResult.textContent]
+  [                     listingPageRawContent=textContent (full listing page text)]
   [                     rawContentSource="LISTING_PAGE"]
   [POST /api/admin/staging  (X-API-Key auth, UNCHANGED)]
         |
         v
 main app AdminStagingController -> StagingProductService.createStagingProduct()
   staging_products row:
-    source_url            = detail URL (per product)
-    raw_page_content      = LLM-carved excerpt from listing page
+    source_url               = detail URL (per product)
+    raw_page_content         = LLM-carved excerpt from listing page
     listing_page_raw_content = full listing page text
-    raw_content_source    = LISTING_PAGE
+    raw_content_source       = LISTING_PAGE
         |
         v (admin approves in StagingReview UI)
 main app StagingProductService.approveStagingProduct() -> copyToProduct()

@@ -32,14 +32,20 @@ public class StagingProductService {
     private String mainServiceApiKey;
 
     /**
-     * Save list of extracted products to staging table
+     * Save list of extracted products to staging table.
+     *
+     * @param products             products extracted by the LLM (each has sourceUrl already set to the detail URL)
+     * @param listingUrl           the listing page URL (used only as fallback label — individual product.sourceUrl is used)
+     * @param listingPageRawContent verbatim visible text of the listing page, preserved for provenance
      */
-    public int saveExtractedProducts(List<ExtractedProduct> products, String sourceUrl) {
+    public int saveExtractedProducts(List<ExtractedProduct> products,
+                                     String listingUrl,
+                                     String listingPageRawContent) {
         int savedCount = 0;
 
         for (ExtractedProduct product : products) {
             try {
-                saveToStaging(product, sourceUrl);
+                saveToStaging(product, listingUrl, listingPageRawContent);
                 savedCount++;
             } catch (Exception e) {
                 log.error("Failed to save product to staging: {}", product.getProductName(), e);
@@ -52,8 +58,10 @@ public class StagingProductService {
     /**
      * Save single product to staging via main app API
      */
-    private void saveToStaging(ExtractedProduct product, String sourceUrl) {
-        Map<String, Object> stagingData = buildStagingRequest(product, sourceUrl);
+    private void saveToStaging(ExtractedProduct product,
+                                String listingUrl,
+                                String listingPageRawContent) {
+        Map<String, Object> stagingData = buildStagingRequest(product, listingUrl, listingPageRawContent);
 
         try {
             log.debug("Sending staging data: {}", stagingData);
@@ -80,9 +88,13 @@ public class StagingProductService {
     }
 
     /**
-     * Build request body for staging API
+     * Build request body for staging API.
+     * Uses {@code product.getSourceUrl()} (the per-product detail URL resolved by Phase 1 matching)
+     * rather than the raw listing URL argument.
      */
-    private Map<String, Object> buildStagingRequest(ExtractedProduct product, String sourceUrl) {
+    private Map<String, Object> buildStagingRequest(ExtractedProduct product,
+                                                     String listingUrl,
+                                                     String listingPageRawContent) {
         Map<String, Object> data = new HashMap<>();
 
         // Required fields
@@ -128,9 +140,25 @@ public class StagingProductService {
             data.put("aiConfidence", BigDecimal.valueOf(product.getConfidenceScore()));
         }
 
-        // Source metadata
+        // Review notes (Sharia flags, enrichment failures, invalid category warnings)
+        if (product.getReviewNotes() != null && !product.getReviewNotes().isBlank()) {
+            data.put("reviewNotes", product.getReviewNotes());
+        }
+
+        // Source metadata — use the per-product detail URL set by matchProductUrls() or enrichment.
+        // Fall back to listing URL when sourceUrl is null or blank (safety net per spec section 5m).
+        String sourceUrl = product.getSourceUrl();
+        if (sourceUrl == null || sourceUrl.isBlank()) {
+            sourceUrl = listingUrl;
+        }
         data.put("sourceUrl", sourceUrl);
         data.put("approvalStatus", "PENDING");
+
+        // Listing page provenance fields
+        if (listingPageRawContent != null && !listingPageRawContent.isBlank()) {
+            data.put("listingPageRawContent", listingPageRawContent);
+        }
+        data.put("rawContentSource", "LISTING_PAGE");
 
         return data;
     }

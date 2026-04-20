@@ -1,5 +1,6 @@
 package com.smartguide.poc.service;
 
+import com.smartguide.poc.dto.RankingResult;
 import com.smartguide.poc.entity.Product;
 import com.smartguide.poc.repository.ProductRepository;
 import jakarta.persistence.EntityManager;
@@ -40,7 +41,7 @@ public class ProductService {
     /**
      * Get product recommendations based on filters and intent
      */
-    public List<Map<String, Object>> getRecommendations(
+    public RankingResult getRecommendations(
             Map<String, Object> filters,
             Map<String, Object> intentData,
             Map<String, Object> categories,
@@ -49,7 +50,7 @@ public class ProductService {
         List<Product> products = queryProducts(filters);
 
         if (products.isEmpty()) {
-            log.warn("No products found with filters, getting fallback products");
+            log.warn("No keyword-ready products found with filters, getting fallback products");
             products = getFallbackProducts();
         }
 
@@ -59,10 +60,11 @@ public class ProductService {
         enrichedIntentData.put("secondary_categories", categories.get("secondary"));
         enrichedIntentData.put("user_input", userInput != null ? userInput.toLowerCase() : "");
 
-        List<Map<String, Object>> rankedProducts = rankProducts(products, enrichedIntentData, userInput);
+        RankingResult ranked = rankProducts(products, enrichedIntentData, userInput);
 
-        // Return top 5
-        return rankedProducts.stream().limit(5).collect(Collectors.toList());
+        // Return top 5, preserving the chat summary
+        List<Map<String, Object>> top5 = ranked.rankedProducts().stream().limit(5).collect(Collectors.toList());
+        return new RankingResult(ranked.chatSummary(), top5);
     }
 
     /**
@@ -86,6 +88,16 @@ public class ProductService {
         if (filters.containsKey("active")) {
             predicates.add(cb.equal(product.get("active"), filters.get("active")));
         }
+
+        // Keywords filter — only include products that have at least one keyword generated.
+        // array_length(keywords, 1) returns NULL when the array is NULL or empty, so
+        // the IS NOT NULL check on array_length covers both cases.
+        predicates.add(
+            cb.isNotNull(
+                cb.function("array_length", Integer.class,
+                    product.get("keywords"), cb.literal(1))
+            )
+        );
 
         // Sharia certified filter — treat NULL as true (all products are Sharia-compliant by default)
         if (filters.containsKey("sharia_certified")) {
@@ -127,21 +139,27 @@ public class ProductService {
     }
 
     /**
-     * Get generic fallback products when no specific matches
+     * Get generic fallback products when no specific matches found.
+     * Only returns products that have keywords generated (same constraint as the main query).
      */
     private List<Product> getFallbackProducts() {
-        List<String> fallbackCategories = Arrays.asList("CASA", "CREDIT_CARD", "INVESTMENT");
+        List<String> fallbackCategories = Arrays.asList(
+                "COVERED_CARDS", "DEBIT_CARDS", "CHARGE_CARDS",
+                "HOME_FINANCE", "PERSONAL_FINANCE", "AUTO_FINANCE",
+                "TAKAFUL", "SAVINGS", "CURRENT_ACCOUNTS", "INVESTMENTS");
 
-        return productRepository.findByCategoriesWithBasicFilters(fallbackCategories)
+        return productRepository.findByCategoriesWithKeywords(fallbackCategories)
                 .stream()
                 .limit(10)
                 .collect(Collectors.toList());
     }
 
     /**
-     * Rank products using two-stage approach: formula-based pre-filtering + LLM re-ranking
+     * Rank products using two-stage approach: formula-based pre-filtering + LLM re-ranking.
+     * Returns a {@link RankingResult} that includes both the ranked products and an
+     * LLM-generated chat summary (null when LLM is disabled or ranking fails).
      */
-    private List<Map<String, Object>> rankProducts(List<Product> products, Map<String, Object> intentData, String userInput) {
+    private RankingResult rankProducts(List<Product> products, Map<String, Object> intentData, String userInput) {
         // Stage 1: Get top candidates using formula-based ranking
         log.info("Stage 1: Formula-based ranking of {} products", products.size());
         List<Map<String, Object>> formulaRanked = rankProductsWithFormula(products, intentData);
@@ -160,11 +178,11 @@ public class ProductService {
                         .map(item -> (Product) item.get("product"))
                         .collect(Collectors.toList());
 
-                List<Map<String, Object>> llmRanked = llmService.rankProductsWithLLM(
+                RankingResult llmResult = llmService.rankProductsWithLLM(
                         topProducts, userInput, intentData);
 
                 log.info("LLM re-ranking completed successfully");
-                return llmRanked;
+                return llmResult;
 
             } catch (Exception e) {
                 log.warn("LLM re-ranking failed, using formula-based results: {}", e.getMessage());
@@ -173,8 +191,8 @@ public class ProductService {
             log.info("LLM ranking disabled, using formula-based results");
         }
 
-        // Fallback: Return formula-based results
-        return topCandidates;
+        // Fallback: formula-based results, no chat summary
+        return new RankingResult(null, topCandidates);
     }
 
     /**

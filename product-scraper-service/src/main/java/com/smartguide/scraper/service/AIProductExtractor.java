@@ -191,10 +191,22 @@ public class AIProductExtractor {
     }
 
     /**
-     * Stage 2: Extract all products from webpage
+     * Stage 2: Extract all products from webpage.
+     * Delegates to the overload with an empty hint list (backward-compatible).
      */
     public List<ExtractedProduct> extractProducts(String pageContent, String sourceUrl) {
-        String prompt = buildExtractionPrompt(pageContent);
+        return extractProducts(pageContent, sourceUrl, new ArrayList<>());
+    }
+
+    /**
+     * Stage 2 (with DOM hints): Extract products using a known product name list from DOM anchors.
+     * Providing hints eliminates LLM product discovery — the model only needs to enrich each
+     * named product with category, description, rates, and eligibility from the page text.
+     * This prevents the LLM from looping and ensures all products are covered within the token budget.
+     */
+    public List<ExtractedProduct> extractProducts(String pageContent, String sourceUrl,
+                                                   List<String> productNameHints) {
+        String prompt = buildExtractionPrompt(pageContent, productNameHints);
 
         try {
             String response = callLLM(prompt);
@@ -224,61 +236,70 @@ public class AIProductExtractor {
     }
 
     /**
-     * Build prompt for product extraction (Stage 2)
+     * Build prompt for product extraction (Stage 2).
+     * When productNameHints is non-empty, the prompt leads with the known product list from the DOM
+     * so the LLM enriches specific products rather than discovering them — this prevents looping and
+     * ensures the token budget covers all products instead of just the first few.
      */
-    private String buildExtractionPrompt(String pageContent) {
-        // Increased from 8000 to 12000 — more context produces richer structured output
+    private String buildExtractionPrompt(String pageContent, List<String> productNameHints) {
         String truncated = pageContent.length() > 12000
             ? pageContent.substring(0, 12000) + "..."
             : pageContent;
 
+        String productListSection = "";
+        if (!productNameHints.isEmpty()) {
+            StringBuilder sb = new StringBuilder(
+                "PRODUCTS ON THIS PAGE (extracted from page navigation — trust this list):\n");
+            for (int i = 0; i < productNameHints.size(); i++) {
+                sb.append(i + 1).append(". ").append(productNameHints.get(i)).append("\n");
+            }
+            sb.append("\nExtract details for EACH product in the list above. " +
+                      "Use the exact product_name from the list. " +
+                      "Do not invent additional products. Do not skip any.\n\n");
+            productListSection = sb.toString();
+        }
+
         return String.format(
-            "You are an Islamic banking product extraction assistant. Your output feeds directly into an AI-powered " +
-            "recommendation engine that generates product summaries and matches customers to products. " +
-            "Extract ALL financial products from the webpage below.\n\n" +
+            "You are an Islamic banking product extraction assistant. " +
+            "Extract financial products from the webpage below. Be concise — coverage of every product matters more than detail per product.\n\n" +
+            "%s" +
             "WEBPAGE CONTENT:\n%s\n\n" +
             "INSTRUCTIONS:\n" +
-            "1. Identify all financial products mentioned (credit cards, home finance, auto finance, savings accounts, " +
-            "   financing facilities, Takaful, investments, etc.).\n" +
-            "2. For each product, write a DETAILED description (4-6 sentences minimum). This description will be used " +
-            "   by a downstream AI to generate customer-facing summaries — it must be rich enough to produce a complete, " +
-            "   accurate summary without guessing. Include: what the product is, how it works (Islamic structure), " +
-            "   who it is for, what problems it solves, and any notable features.\n" +
-            "3. Identify the Islamic financing structure (Murabaha, Tawarruq, Musharakah, Ijarah, Wakala, Mudharabah, etc.).\n" +
-            "4. Extract ALL numeric values mentioned (profit rates, fees, minimum income, minimum credit score, tenure).\n" +
-            "5. Identify the target customer profile: employment type, nationality, income bracket, lifestyle segment.\n" +
-            "6. Identify specific use cases: what situations prompt a customer to choose this product.\n" +
-            "7. Extract detailed eligibility: minimum income, minimum age, nationality restrictions, employment status, documents needed.\n" +
-            "8. Capture a raw_page_content field: copy the most informative and relevant 2000-3000 characters of the " +
-            "   page text that describe this product (features, rates, eligibility, benefits). This is the verbatim " +
-            "   source text a downstream AI will use as its primary grounding source — include everything factual.\n" +
-            "9. Assign confidence score (0.0-1.0) based on data completeness.\n" +
-            "10. IMPORTANT TERMINOLOGY: Use 'profit rate' not 'interest', 'finance' not 'loan', " +
-            "    'home finance' not 'mortgage', 'Takaful' not 'insurance'. All products are Sharia-compliant.\n\n" +
+            "1. %s\n" +
+            "2. For each product write a concise description (2-3 sentences): what it is, who it is for, key benefit.\n" +
+            "3. Identify the Islamic financing structure (Murabaha, Tawarruq, Ijarah, Wakala, etc.) if mentioned.\n" +
+            "4. Extract numeric values (profit rates, fees, minimum income, minimum credit score) where present.\n" +
+            "5. List key benefits (max 4) and eligibility criteria (max 4) as short phrases.\n" +
+            "6. Assign confidence score (0.0-1.0) based on data completeness.\n" +
+            "7. IMPORTANT TERMINOLOGY: Use 'profit rate' not 'interest', 'finance' not 'loan', " +
+            "   'home finance' not 'mortgage', 'Takaful' not 'insurance'. All products are Sharia-compliant.\n\n" +
             "OUTPUT FORMAT (JSON array — return [] if no products found):\n" +
             "[\n" +
             "  {\n" +
             "    \"product_name\": \"Full official product name\",\n" +
-            "    \"description\": \"Detailed 4-6 sentence description suitable for AI summary generation\",\n" +
-            "    \"target_customer\": \"Who this product is designed for (income level, employment type, lifestyle)\",\n" +
+            "    \"description\": \"2-3 sentence description\",\n" +
+            "    \"target_customer\": \"Who this product is for\",\n" +
             "    \"use_cases\": [\"Use case 1\", \"Use case 2\"],\n" +
             "    \"category\": \"CREDIT_CARD|FINANCING|SAVINGS_ACCOUNT|INVESTMENT|TAKAFUL\",\n" +
-            "    \"sub_category\": \"e.g. HOME_FINANCE, AUTO_FINANCE, PERSONAL_FINANCE (if applicable)\",\n" +
+            "    \"sub_category\": \"HOME_FINANCE|AUTO_FINANCE|PERSONAL_FINANCE (if applicable)\",\n" +
             "    \"islamic_product\": true,\n" +
-            "    \"islamic_structure\": \"Murabaha|Tawarruq|Musharakah|Ijarah|Wakala|etc\",\n" +
+            "    \"islamic_structure\": \"Murabaha|Tawarruq|Ijarah|Wakala|etc\",\n" +
             "    \"annual_rate\": 12.5,\n" +
             "    \"annual_fee\": 150.0,\n" +
             "    \"min_income\": 5000.0,\n" +
             "    \"min_credit_score\": 600,\n" +
-            "    \"key_benefits\": [\"Benefit 1 (verbatim from page)\", \"Benefit 2\"],\n" +
-            "    \"eligibility_criteria\": [\"Must be UAE national or resident\", \"Minimum age 21\", \"Minimum monthly income AED 5000\"],\n" +
-            "    \"raw_page_content\": \"[Verbatim 2000-3000 character excerpt of the most informative product content from the page]\",\n" +
+            "    \"key_benefits\": [\"Benefit 1\", \"Benefit 2\"],\n" +
+            "    \"eligibility_criteria\": [\"UAE national or resident\", \"Min age 21\"],\n" +
             "    \"confidence_score\": 0.85,\n" +
-            "    \"extraction_reasoning\": \"Brief explanation of what was found and any gaps\"\n" +
+            "    \"extraction_reasoning\": \"One sentence on data completeness\"\n" +
             "  }\n" +
             "]\n\n" +
             "JSON OUTPUT:",
-            truncated
+            productListSection,
+            truncated,
+            productNameHints.isEmpty()
+                ? "Identify ALL financial products mentioned. Do not stop early — extract every product."
+                : "Extract details for each product listed above. Use the exact product_name from the list."
         );
     }
 

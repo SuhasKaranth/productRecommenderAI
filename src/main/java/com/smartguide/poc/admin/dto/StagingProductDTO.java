@@ -56,6 +56,10 @@ public class StagingProductDTO {
     // Raw page content for LLM grounding
     private String rawPageContent;
 
+    // Listing page provenance (Phase 1)
+    private String listingPageRawContent;
+    private String rawContentSource;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -90,6 +94,8 @@ public class StagingProductDTO {
                 .aiCategorizationJson(entity.getAiCategorizationJson())
                 .keywords(entity.getKeywords())
                 .rawPageContent(entity.getRawPageContent())
+                .listingPageRawContent(entity.getListingPageRawContent())
+                .rawContentSource(entity.getRawContentSource())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
@@ -124,6 +130,8 @@ public class StagingProductDTO {
         entity.setAiCategorizationJson(dto.getAiCategorizationJson());
         entity.setKeywords(dto.getKeywords());
         entity.setRawPageContent(dto.getRawPageContent());
+        entity.setListingPageRawContent(dto.getListingPageRawContent());
+        entity.setRawContentSource(dto.getRawContentSource());
         return entity;
     }
 }

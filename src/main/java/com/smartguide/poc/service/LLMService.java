@@ -17,6 +17,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import com.smartguide.poc.dto.RankingResult;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -33,8 +34,8 @@ public class LLMService {
             Extract the customer's intent from their input and return a JSON response.
 
             Valid intents:
-            - TRAVEL: Travel-related needs (cards with travel benefits, travel insurance)
-            - LOAN: General financing or loan requests (not specific to car/home/education)
+            - TRAVEL: Travel-related needs (cards with travel benefits, lounge access, miles)
+            - LOAN: General financing requests (not specific to car/home/education)
             - SAVINGS: Savings accounts or deposit products
             - INVESTMENT: Investment products or wealth management
             - INSURANCE: Insurance or Takaful products
@@ -42,19 +43,23 @@ public class LLMService {
             - HOME: Home financing or property-related products
             - EDUCATION: Education financing
             - BUSINESS: Business banking or SME products
-            - PAYMENT: Credit cards, debit cards, payment solutions (includes cards with rewards, cashback, golf privileges, dining benefits, etc.)
+            - DEBIT_CARD: Debit cards, current account cards, everyday spending cards (NOT credit cards)
+            - PAYMENT: Credit cards, charge cards, covered cards, cashback cards, rewards cards, cards with golf/dining/lifestyle benefits
             - GENERAL: General inquiry or unclear intent
 
             IMPORTANT CLASSIFICATION RULES:
-            - If the request mentions "credit card" or "card" with benefits (golf, rewards, cashback, dining, etc.), use PAYMENT intent
+            - If the request explicitly mentions "debit card" or "ATM card" or "current account card", use DEBIT_CARD intent
+            - If the request mentions "credit card", "charge card", "covered card", or card benefits (golf, cashback, rewards, dining), use PAYMENT intent
             - If the request mentions "car loan" or "auto financing" or "vehicle financing", use CAR intent
-            - Card benefits (golf, travel perks, cashback) = PAYMENT intent, NOT the benefit category
+            - Card benefits (golf, travel perks, cashback) without "debit" = PAYMENT intent
 
             Examples:
+            - "I want a debit card" -> DEBIT_CARD intent
+            - "debit card for everyday use" -> DEBIT_CARD intent
             - "I want golf privileges on credit card" -> PAYMENT intent
             - "credit card with cashback" -> PAYMENT intent
+            - "covered card benefits" -> PAYMENT intent
             - "I need a car loan" -> CAR intent
-            - "financing for buying a car" -> CAR intent
 
             Response format:
             {
@@ -838,9 +843,11 @@ public class LLMService {
     }
 
     /**
-     * Rank products using LLM based on user query and intent
+     * Rank products using LLM based on user query and intent.
+     * Returns a {@link RankingResult} containing both the ranked product list and a
+     * conversational chat summary generated in the same LLM call.
      */
-    public List<Map<String, Object>> rankProductsWithLLM(
+    public RankingResult rankProductsWithLLM(
             List<Product> products,
             String userInput,
             Map<String, Object> intentData) {
@@ -918,18 +925,22 @@ public class LLMService {
         }
 
         prompt.append("\n\nOUTPUT REQUIREMENTS:\n");
-        prompt.append("Return ONLY a valid JSON array with this exact format:\n");
-        prompt.append("[\n");
-        prompt.append("  {\n");
-        prompt.append("    \"product_code\": \"CC_TRAVEL_01\",\n");
-        prompt.append("    \"relevance_score\": 0.95,\n");
-        prompt.append("    \"reason\": \"Excellent match - specific explanation of why this product suits the user's needs\"\n");
-        prompt.append("  }\n");
-        prompt.append("]\n\n");
+        prompt.append("Return ONLY a valid JSON object with this exact format:\n");
+        prompt.append("{\n");
+        prompt.append("  \"summary\": \"Friendly 2-3 sentence response addressing the user's query. Mention the top product by name and explain why these products match their needs. Use 'profit rate' not 'interest', 'finance' not 'loan', 'Takaful' not 'insurance'.\",\n");
+        prompt.append("  \"rankings\": [\n");
+        prompt.append("    {\n");
+        prompt.append("      \"product_code\": \"CC_TRAVEL_01\",\n");
+        prompt.append("      \"relevance_score\": 0.95,\n");
+        prompt.append("      \"reason\": \"Excellent match - specific explanation of why this product suits the user's needs\"\n");
+        prompt.append("    }\n");
+        prompt.append("  ]\n");
+        prompt.append("}\n\n");
+        prompt.append("- summary: Conversational tone, personalized to the query, Sharia-compliant terminology\n");
         prompt.append("- relevance_score: 0.0 to 1.0 (how well it matches the query)\n");
         prompt.append("- reason: Clear, personalized explanation (1-2 sentences)\n");
-        prompt.append("- Sort by relevance_score descending (best match first)\n");
-        prompt.append("- Include ALL products in the response\n");
+        prompt.append("- Sort rankings by relevance_score descending (best match first)\n");
+        prompt.append("- Include ALL products in the rankings array\n");
 
         return prompt.toString();
     }
@@ -989,10 +1000,12 @@ public class LLMService {
     }
 
     /**
-     * Parse LLM ranking response
+     * Parse LLM ranking response into a {@link RankingResult}.
+     * Expects a JSON object with {@code summary} and {@code rankings} fields.
+     * Falls back gracefully when the LLM returns a bare array (older format).
      */
     @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> parseRankingResponse(String response, List<Product> products) throws JsonProcessingException {
+    private RankingResult parseRankingResponse(String response, List<Product> products) throws JsonProcessingException {
         JsonNode root = objectMapper.readTree(response);
 
         // Extract content based on provider
@@ -1007,21 +1020,28 @@ public class LLMService {
             throw new RuntimeException("Unknown response format");
         }
 
-        // Parse the ranking array
+        // Parse the JSON — expect {"summary": "...", "rankings": [...]} but handle bare arrays too
+        String summary = null;
         List<Map<String, Object>> rankings;
-        try {
-            // Try to parse directly as array
-            rankings = objectMapper.readValue(content, new TypeReference<List<Map<String, Object>>>() {});
-        } catch (JsonProcessingException e) {
-            // If that fails, try to extract array from object
-            JsonNode contentNode = objectMapper.readTree(content);
-            if (contentNode.isArray()) {
-                rankings = objectMapper.convertValue(contentNode, new TypeReference<List<Map<String, Object>>>() {});
-            } else if (contentNode.has("rankings")) {
-                rankings = objectMapper.convertValue(contentNode.get("rankings"), new TypeReference<List<Map<String, Object>>>() {});
-            } else {
-                throw new RuntimeException("Could not parse ranking response: " + content);
+
+        JsonNode contentNode = objectMapper.readTree(content);
+        if (contentNode.isObject()) {
+            if (contentNode.has("summary")) {
+                summary = contentNode.get("summary").asText();
             }
+            if (contentNode.has("rankings")) {
+                rankings = objectMapper.convertValue(contentNode.get("rankings"),
+                        new TypeReference<List<Map<String, Object>>>() {});
+            } else {
+                // Object without a rankings key — try treating the whole object as the first element
+                throw new RuntimeException("Could not parse ranking response: missing 'rankings' key in " + content);
+            }
+        } else if (contentNode.isArray()) {
+            // Bare array fallback (legacy format)
+            rankings = objectMapper.convertValue(contentNode,
+                    new TypeReference<List<Map<String, Object>>>() {});
+        } else {
+            throw new RuntimeException("Could not parse ranking response: " + content);
         }
 
         // Map rankings back to products
@@ -1049,7 +1069,8 @@ public class LLMService {
             }
         }
 
-        log.info("Successfully parsed {} ranked products from LLM response", result.size());
-        return result;
+        log.info("Successfully parsed {} ranked products from LLM response (summary present: {})",
+                result.size(), summary != null);
+        return new RankingResult(summary, result);
     }
 }

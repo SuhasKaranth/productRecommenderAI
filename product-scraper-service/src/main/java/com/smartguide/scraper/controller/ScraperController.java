@@ -1,13 +1,17 @@
 package com.smartguide.scraper.controller;
 
+import com.smartguide.scraper.dto.ScrapeJob;
 import com.smartguide.scraper.dto.ScrapeJobResponse;
 import com.smartguide.scraper.dto.TriggerScrapeRequest;
 import com.smartguide.scraper.service.ScraperConfigLoader;
 import com.smartguide.scraper.service.ScraperOrchestrationService;
+import com.smartguide.scraper.service.ScrapeJobStore;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -30,6 +34,7 @@ public class ScraperController {
     private final ScraperConfigLoader configLoader;
     private final com.smartguide.scraper.service.BasicScraperService basicScraperService;
     private final com.smartguide.scraper.service.EnhancedScraperService enhancedScraperService;
+    private final ScrapeJobStore jobStore;
 
     /**
      * MVP1: Simple synchronous scraping endpoint
@@ -166,6 +171,118 @@ public class ScraperController {
         response.put("message", "Configurations reloaded successfully");
         response.put("count", configLoader.getAllConfigs().size());
         return ResponseEntity.ok(response);
+    }
+
+    // -------------------------------------------------------------------------
+    // Async scrape-and-enrich endpoints (new — does not affect existing endpoints)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Starts an asynchronous scrape-and-enrich job.
+     *
+     * <p>Returns 202 Accepted immediately with a job ID.
+     * The client should poll {@code GET /api/scraper/jobs/{jobId}/status} every 2 seconds
+     * to observe progress.
+     * Returns 409 Conflict when an active job for the same URL already exists.
+     */
+    @PostMapping("/scrape-and-enrich")
+    @Operation(summary = "Start async scrape with AI enrichment (returns job ID immediately)",
+               description = "Initiates a scrape-and-enrich job asynchronously. "
+                       + "Poll GET /api/scraper/jobs/{jobId}/status for progress.")
+    @ApiResponse(responseCode = "202", description = "Job started — jobId returned")
+    @ApiResponse(responseCode = "409", description = "A job for this URL is already in progress")
+    public ResponseEntity<?> scrapeAndEnrich(
+            @RequestBody com.smartguide.scraper.dto.ScrapeRequest request) {
+
+        log.info("Async scrape-and-enrich request for URL: {}", request.getUrl());
+
+        // Reject duplicate in-flight jobs for the same URL
+        ScrapeJob existingJob = jobStore.getActiveJobForUrl(request.getUrl());
+        if (existingJob != null) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                    "jobId", existingJob.getJobId(),
+                    "url", existingJob.getUrl(),
+                    "status", "IN_PROGRESS",
+                    "message", "A scrape job for this URL is already in progress"
+            ));
+        }
+
+        ScrapeJob job = jobStore.createJob(request.getUrl());
+
+        // Launch enrichment on a background thread — HTTP response returns immediately
+        CompletableFuture.runAsync(() -> {
+            try {
+                enhancedScraperService.scrapeAndEnrichAsync(request.getUrl(), job);
+            } catch (Exception e) {
+                log.error("Unhandled error in async scrape-and-enrich job '{}': {}",
+                        job.getJobId(), e.getMessage(), e);
+                job.setError(e.getMessage());
+                job.setStatus(ScrapeJob.Status.FAILED);
+                job.setCompletedAt(java.time.LocalDateTime.now());
+            }
+        });
+
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(Map.of(
+                "jobId", job.getJobId(),
+                "url", request.getUrl(),
+                "status", "STARTED",
+                "message", "Scrape and enrich job started"
+        ));
+    }
+
+    /**
+     * Returns the current state of an async scrape-and-enrich job, including all
+     * progress events emitted so far.
+     *
+     * <p>This is the new status endpoint for async enrichment jobs.
+     * The existing {@code GET /api/scraper/status/{jobId}} endpoint is preserved unchanged
+     * for the legacy orchestration flow.
+     */
+    @GetMapping("/jobs/{jobId}/status")
+    @Operation(summary = "Get status and progress of a scrape-and-enrich job",
+               description = "Poll this endpoint every 2 seconds while the job is IN_PROGRESS.")
+    @ApiResponse(responseCode = "200", description = "Job state returned")
+    @ApiResponse(responseCode = "404", description = "Job ID not found")
+    public ResponseEntity<?> getEnrichmentJobStatus(@PathVariable String jobId) {
+        log.debug("Polling status for enrichment job: {}", jobId);
+        ScrapeJob job = jobStore.getJob(jobId);
+        if (job == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(job);
+    }
+
+    /**
+     * Requests cancellation of an in-progress scrape-and-enrich job.
+     *
+     * <p>Sets a cancellation flag that the enrichment loop checks before each batch.
+     * Products already enriched are saved to staging; unprocessed cards are discarded.
+     */
+    @DeleteMapping("/jobs/{jobId}")
+    @Operation(summary = "Cancel an in-progress scrape-and-enrich job",
+               description = "Sets a cancellation flag. Already-enriched products are saved to staging.")
+    @ApiResponse(responseCode = "200", description = "Cancellation requested")
+    @ApiResponse(responseCode = "400", description = "Job is not active and cannot be cancelled")
+    @ApiResponse(responseCode = "404", description = "Job ID not found")
+    public ResponseEntity<?> cancelEnrichmentJob(@PathVariable String jobId) {
+        log.info("Cancellation requested for enrichment job: {}", jobId);
+        ScrapeJob job = jobStore.getJob(jobId);
+        if (job == null) {
+            return ResponseEntity.notFound().build();
+        }
+        if (!job.isActive()) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "jobId", jobId,
+                    "status", job.getStatus().name(),
+                    "message", "Job is not active and cannot be cancelled"
+            ));
+        }
+        jobStore.requestCancellation(jobId);
+        return ResponseEntity.ok(Map.of(
+                "jobId", jobId,
+                "status", "CANCELLING",
+                "message", "Cancellation requested. Already-processed products will be saved."
+        ));
     }
 
     @GetMapping("/health")

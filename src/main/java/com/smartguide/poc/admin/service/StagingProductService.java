@@ -269,6 +269,8 @@ public class StagingProductService {
         product.setScrapedAt(staging.getScrapedAt());
         product.setDataQualityScore(staging.getDataQualityScore());
         product.setRawPageContent(staging.getRawPageContent());
+        product.setListingPageRawContent(staging.getListingPageRawContent());
+        product.setRawContentSource(staging.getRawContentSource());
     }
 
     /**

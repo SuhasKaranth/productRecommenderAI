@@ -57,4 +57,17 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
            "AND p.active = true " +
            "AND (p.shariaCertified = true OR p.shariaCertified IS NULL)")
     List<Product> findByCategoriesWithBasicFilters(@Param("categories") List<String> categories);
+
+    /**
+     * Find products by category that have at least one keyword generated.
+     * array_length(keywords, 1) returns NULL for NULL or empty arrays — the IS NOT NULL
+     * check on the function result covers both cases without a separate null guard.
+     */
+    @Query(value = "SELECT * FROM products p " +
+                   "WHERE p.category IN :categories " +
+                   "AND p.active = true " +
+                   "AND (p.sharia_certified = true OR p.sharia_certified IS NULL) " +
+                   "AND array_length(p.keywords, 1) IS NOT NULL",
+           nativeQuery = true)
+    List<Product> findByCategoriesWithKeywords(@Param("categories") List<String> categories);
 }

@@ -32,4 +32,7 @@ public class RecommendationResponse {
 
     @Schema(description = "Optional message to user")
     private String message;
+
+    @Schema(description = "Conversational AI-generated summary explaining the recommendations")
+    private String summary;
 }
